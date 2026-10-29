@@ -91,7 +91,7 @@ main {
 .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: 0; }
 /* Same colours as LED in ui.js. */
 .sw.y { background: #ffb321; } .sw.b { background: #4d9dff; } .sw.g { background: #47d86a; } .sw.r { background: #ff3a2f; }
-.sw.c { background: #36d3dc; } .sw.w { background: #f1efe9; } .sw.o { background: #ff8a1c; }
+.sw.c { background: #36d3dc; } .sw.w { background: #f1efe9; } .sw.o { background: #ff8a1c; } .sw.v { background: #c6a2ff; }
 kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: inherit; font-size: 11px; color: var(--ink); }
 
 #start {

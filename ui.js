@@ -176,6 +176,7 @@ export class Ui {
       case 'touch': this.touchSensitivity = v; return;
       case 'hold':
         this.fixedPressure = 1 + Math.round(v * 254);
+        for (const k of this.fixedKeys || []) this.call('keyPressure', k, this.fixedPressure);
         return this.send('prop', { values: { fixedPressure: this.fixedPressure } });
       case 'transpose': {
         // pitch_fader::Quantize with range 12 and its hysteresis margin.
@@ -488,13 +489,17 @@ export class Ui {
     return clamp(1 + Math.round(Math.min(1, pressure * gain) * 254), 1, 255);
   }
 
+  // Keys held without real pressure (finger, mouse, PC keyboard) follow the
+  // hold fader while held, as a pressure change on the instrument.
   pad(index, action, pressure, source = 'pad') {
+    const fixed = this.fixedKeys || (this.fixedKeys = new Set());
     if (action === 'on') {
       this.lastKey = index;
+      if (pressure == null) fixed.add(index); else fixed.delete(index);
       const p = pressure == null ? this.fixedPressure : this.touchPressure(pressure);
       this.call('keyOn', index, p);
     } else if (action === 'pressure') this.call('keyPressure', index, this.touchPressure(pressure));
-    else this.call('keyOff', index);
+    else { fixed.delete(index); this.call('keyOff', index); }
   }
 
   // Touch bend from pad index towards target, pos 0..1; off with the
@@ -506,11 +511,12 @@ export class Ui {
   padSlide(index, target) {
     if (!this.bendAllowed()) return false;
     this.call('keySlide', index, target);
+    if (this.fixedKeys?.delete(index)) this.fixedKeys.add(target);
     this.lastKey = target;
     return true;
   }
 
-  releaseAllKeys() { for (let k = 0; k < KEYS; k++) this.call('keyOff', k); }
+  releaseAllKeys() { this.fixedKeys?.clear(); for (let k = 0; k < KEYS; k++) this.call('keyOff', k); }
 
   // MIDI clock at 24 ppqn: tempo from the tick intervals, phase realigned
   // on every beat and on Start; times out after twice the period.
@@ -805,10 +811,27 @@ export class Ui {
     for (const k of status.stack) lit[k] = [LED.white, 0.25];
     for (const k of status.captured) lit[k] = [LED.violet, 0.6];
     for (const v of status.voices) if (v.key < KEYS && (v.gate || v.env > 2)) lit[v.key] = [v.env > 235 ? LED.red : LED.yellow, 0.25 + 0.75 * v.env / 255];
-    for (let k = 0; k < KEYS; k++) {
-      if (status.keys[k] && !lit[k]) lit[k] = [LED.yellow, 0.35];
-      p.padLight(k, lit[k]?.[0], lit[k]?.[1] ?? 0);
+    for (let k = 0; k < KEYS; k++) if (status.keys[k] && !lit[k]) lit[k] = [LED.yellow, 0.35];
+    // Slides take over, as SlideLeds (shared/slide_leds.h): the visited pads
+    // dim turquoise, the two pads under the finger pulsing turquoise (400 ms,
+    // split by the position), the note's own pad light violet.
+    if (this.bendAllowed()) {
+      const level = new Array(KEYS).fill(0), origin = new Array(KEYS).fill(false);
+      const light = (k, l) => { if (k >= 0 && l > level[k]) level[k] = l; };
+      for (const s of p.slides.values()) {
+        if (!s.trail) continue;
+        const phase = (t - s.started) % 400, wave = phase < 200 ? 200 - phase : phase - 200;
+        const pulse = 40 + wave * 180 / 200;
+        for (const k of s.trail) light(k, 22);
+        origin[s.origin] = true;
+        light(s.origin, 30 + wave * 45 / 200);
+        light(s.at, 22 + (pulse - 22) * (1 - s.pos));
+        if (s.bendTo >= 0) light(s.bendTo, 22 + (pulse - 22) * s.pos);
+      }
+      // LED levels 0..255 to pad-light opacity (the screen needs a floor).
+      for (let k = 0; k < KEYS; k++) if (level[k]) lit[k] = [origin[k] ? LED.violet : LED.turquoise, Math.min(1, 0.15 + 0.85 * level[k] / 220)];
     }
+    for (let k = 0; k < KEYS; k++) p.padLight(k, lit[k]?.[0], lit[k]?.[1] ?? 0);
   }
 
   drawDisplay() {

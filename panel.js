@@ -244,11 +244,17 @@ export class Panel {
     const neighbours = L.PADS.map((a) => L.PADS.filter((b) => b !== a && Math.hypot(b.x - a.x, b.y - a.y) < L.PAD_SIZE * 1.3).map((b) => b.index));
     const discs = [];
     const pressed = new Set();
-    const touches = new Map(); // pointerId -> { at, bendTo, pos }
+    // pointerId -> { origin, at, bendTo, pos, trail, started }; the ui draws
+    // the slide lights from it (slide_leds.h).
+    const touches = new Map();
+    this.slides = touches;
     const press = (i, on) => {
       if (on) { pressed.add(i); discs[i].setAttribute('transform', 'scale(0.97)'); } else { pressed.delete(i); discs[i].removeAttribute('transform'); }
     };
-    const pressure = (e) => (e.pointerType === 'pen' || (e.pointerType === 'touch' && e.pressure > 0 && e.pressure !== 0.5)) ? e.pressure : null;
+    // Real pressure from a pen or Apple Pencil only: a finger on a touch
+    // screen reports a fixed or made-up value (iPad), so it plays with the
+    // hold fader like the mouse.
+    const pressure = (e) => (e.pointerType === 'pen' ? e.pressure : null);
     const bend = (e, s) => {
       const q = this.point(e), a = L.PADS[s.at];
       let best = -1, far = 0;
@@ -260,10 +266,16 @@ export class Panel {
       const pos = best < 0 ? 0 : clamp01((far - DEAD) / (1 - 2 * DEAD));
       if (pos >= 1 && !pressed.has(best) && this.onSlide(s.at, best)) {
         press(s.at, false); press(best, true);
+        s.trail?.add(best);
         s.at = best; s.bendTo = -1; s.pos = 0;
         return;
       }
       const target = pos > 0 ? best : -1;
+      // The trail starts with the first bend and lasts until the finger lifts.
+      if (target >= 0) {
+        if (!s.trail) { s.trail = new Set([s.origin]); s.started = performance.now(); }
+        s.trail.add(s.at).add(target);
+      }
       if (target === s.bendTo && pos === s.pos) return;
       this.onBend(s.at, target < 0 ? s.bendTo : target, target < 0 ? 0 : pos);
       s.bendTo = target; s.pos = pos;
@@ -274,7 +286,7 @@ export class Panel {
       const light = el('circle', { r: L.PAD_SIZE / 2 - 4, class: 'pad-light' }, g);
       this.drag(g, {
         start: (e) => {
-          touches.set(e.pointerId, { at: p.index, bendTo: -1, pos: 0 });
+          touches.set(e.pointerId, { origin: p.index, at: p.index, bendTo: -1, pos: 0, trail: null, started: 0 });
           press(p.index, true);
           this.onPad(p.index, 'on', pressure(e));
         },
