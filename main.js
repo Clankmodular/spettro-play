@@ -10,6 +10,8 @@ const panel = new Panel(document.getElementById('instrument'), {
   onTouch: (id) => ui.touchControl(id),
   onButton: (id, down) => ui.button(id, down),
   onPad: (index, action, pressure) => ui.pad(index, action, pressure),
+  onBend: (index, target, pos) => ui.padBend(index, target, pos),
+  onSlide: (index, target) => ui.padSlide(index, target),
   onScreen: (type, x, y, arg, fine) => ui.screen(type, x, y, arg, fine),
 });
 const display = new Display(panel.canvas);

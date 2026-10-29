@@ -496,6 +496,19 @@ export class Ui {
     else this.call('keyOff', index);
   }
 
+  // Touch bend from pad index towards target, pos 0..1; off with the
+  // arpeggio and on the preset page, as on the instrument.
+  bendAllowed() { return !this.pr.trilloOn && this.page !== 'preset'; }
+  padBend(index, target, pos) { if (this.bendAllowed()) this.call('keyBend', index, target, pos); }
+  // The finger reached the neighbour: the note moves there. False when the
+  // bend is off, so the panel keeps the note on its pad.
+  padSlide(index, target) {
+    if (!this.bendAllowed()) return false;
+    this.call('keySlide', index, target);
+    this.lastKey = target;
+    return true;
+  }
+
   releaseAllKeys() { for (let k = 0; k < KEYS; k++) this.call('keyOff', k); }
 
   // MIDI clock at 24 ppqn: tempo from the tick intervals, phase realigned

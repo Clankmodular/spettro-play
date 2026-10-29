@@ -73,6 +73,7 @@ export class Controller {
     this.v = Array.from({ length: VOICES }, () => ({
       key: 255, note: 60, cents: 50, aft: 0, gate: false, trig: false, owner: OWNER_KEYBOARD,
       transpose: 0, degree: 0, octave: 3, holdKey: 255, midiNote: -1, midiChannel: -1,
+      bendTo: 255, bendPos: 0,
     }));
     this.gen = new Uint8Array(VOICES);
     this.stealIdx = 0;
@@ -141,7 +142,12 @@ export class Controller {
   renderVoice(i) {
     const v = this.v[i];
     if (v.owner !== OWNER_KEYBOARD || v.key >= KEYS) return;
-    const f = clamp(this.baseFrequency(v.key, v.degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
+    let f = clamp(this.baseFrequency(v.key, v.degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
+    if (v.bendTo < KEYS && v.bendPos > 0) {
+      // Touch bend: geometric interpolation towards the neighbour pad.
+      const to = clamp(this.baseFrequency(v.bendTo, v.degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
+      f *= Math.pow(to / f, v.bendPos);
+    }
     const [note, cents] = Controller.toNote(f);
     v.note = clamp(note + v.transpose, 0, 127);
     v.cents = cents;
@@ -245,6 +251,43 @@ export class Controller {
     this.releaseKey(key);
   }
 
+  // ---- Touch bend (shared/adjacent_bend.h, with the finger position) -------
+  // The hardware bends by the pressure balance of two adjacent pads; on a
+  // screen the finger's position between the two pad centres takes its place
+  // (pos 0..1). As on the instrument it is off with the arpeggio, works in
+  // Hold, and reaching the neighbour moves the note there without a new
+  // trigger, restarting the bands (restartVoiceBands).
+
+  keyBend(key, target, pos) {
+    if (key < 0 || key >= KEYS || target < 0 || target >= KEYS || this.pr.trilloOn) return;
+    pos = clamp(pos, 0, 1);
+    this.v.forEach((v, i) => {
+      if (v.owner !== OWNER_KEYBOARD || v.key !== key || !v.gate) return;
+      v.bendTo = pos > 0 ? target : 255;
+      v.bendPos = pos;
+      this.renderVoice(i);
+    });
+  }
+
+  keySlide(key, target) {
+    if (key < 0 || key >= KEYS || target < 0 || target >= KEYS || this.pr.trilloOn) return;
+    if (!this.keyDown[key] || this.keyDown[target]) return;
+    this.keyDown[key] = 0;
+    this.keyDown[target] = 1;
+    this.keyAftertouch[target] = this.keyAftertouch[key];
+    this.keyStack = this.keyStack.map((k) => (k === key ? target : k));
+    if (this.momentaryHold.delete(key)) this.momentaryHold.add(target);
+    if (this.retouchAt?.has(key)) { this.retouchAt.set(target, this.retouchAt.get(key)); this.retouchAt.delete(key); }
+    this.v.forEach((v, i) => {
+      if (v.owner !== OWNER_KEYBOARD || v.key !== key || !v.gate) return;
+      v.key = target;
+      if (v.holdKey === key) v.holdKey = target;
+      v.bendTo = 255; v.bendPos = 0;
+      this.restartBits ^= 1 << i;
+      this.renderVoice(i);
+    });
+  }
+
   releaseKey(key) {
     this.keyStack = this.keyStack.filter((k) => k !== key);
     // The arpeggio finishes its current step; it only loses the key.
@@ -320,6 +363,7 @@ export class Controller {
       v.octave = this.currentOctaveIndex();
     }
     v.key = key;
+    v.bendTo = 255; v.bendPos = 0;
     v.aft = pressure ?? this.keyAftertouch[key];
     v.gate = true;
     if (trigger) v.trig = true;

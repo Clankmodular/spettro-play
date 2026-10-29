@@ -22,11 +22,13 @@ const KNOB_SWEEP = 300;
 const RING_RADIUS = 31.7;
 
 export class Panel {
-  constructor(container, { onControl, onTouch, onButton, onPad, onScreen }) {
+  constructor(container, { onControl, onTouch, onButton, onPad, onBend, onSlide, onScreen }) {
     this.onControl = onControl;
     this.onTouch = onTouch;
     this.onButton = onButton;
     this.onPad = onPad;
+    this.onBend = onBend;
+    this.onSlide = onSlide;
     this.onScreen = onScreen;
     this.values = {};
     this.controls = {};
@@ -234,16 +236,62 @@ export class Panel {
     });
   }
 
+  // Pads. Dragging a finger towards an adjacent pad bends the note there
+  // (the same-row neighbours and the two of each next row, as the hardware
+  // pairs); past three quarters of the way the note moves to that pad.
   pads() {
+    const DEAD = 0.25; // no bend while the finger stays near its pad's centre
+    const neighbours = L.PADS.map((a) => L.PADS.filter((b) => b !== a && Math.hypot(b.x - a.x, b.y - a.y) < L.PAD_SIZE * 1.3).map((b) => b.index));
+    const discs = [];
+    const pressed = new Set();
+    const touches = new Map(); // pointerId -> { at, bendTo, pos }
+    const press = (i, on) => {
+      if (on) { pressed.add(i); discs[i].setAttribute('transform', 'scale(0.97)'); } else { pressed.delete(i); discs[i].removeAttribute('transform'); }
+    };
+    const pressure = (e) => (e.pointerType === 'pen' || (e.pointerType === 'touch' && e.pressure > 0 && e.pressure !== 0.5)) ? e.pressure : null;
+    const bend = (e, s) => {
+      const q = this.point(e), a = L.PADS[s.at];
+      let best = -1, far = 0;
+      for (const n of neighbours[s.at]) {
+        const b = L.PADS[n], dx = b.x - a.x, dy = b.y - a.y;
+        const t = ((q.x - a.x) * dx + (q.y - a.y) * dy) / (dx * dx + dy * dy);
+        if (t > far) { far = t; best = n; }
+      }
+      const pos = best < 0 ? 0 : clamp01((far - DEAD) / (1 - 2 * DEAD));
+      if (pos >= 1 && !pressed.has(best) && this.onSlide(s.at, best)) {
+        press(s.at, false); press(best, true);
+        s.at = best; s.bendTo = -1; s.pos = 0;
+        return;
+      }
+      const target = pos > 0 ? best : -1;
+      if (target === s.bendTo && pos === s.pos) return;
+      this.onBend(s.at, target < 0 ? s.bendTo : target, target < 0 ? 0 : pos);
+      s.bendTo = target; s.pos = pos;
+    };
     this.padNodes = L.PADS.map((p) => {
       const g = el('g', { class: 'pad', transform: `translate(${p.x} ${p.y})` }, this.svg);
-      const disc = el('circle', { r: L.PAD_SIZE / 2 - 0.5, fill: 'url(#pad)', stroke: '#777', 'stroke-width': 1 }, g);
+      discs[p.index] = el('circle', { r: L.PAD_SIZE / 2 - 0.5, fill: 'url(#pad)', stroke: '#777', 'stroke-width': 1 }, g);
       const light = el('circle', { r: L.PAD_SIZE / 2 - 4, class: 'pad-light' }, g);
-      const pressure = (e) => (e.pointerType === 'pen' || (e.pointerType === 'touch' && e.pressure > 0 && e.pressure !== 0.5)) ? e.pressure : null;
       this.drag(g, {
-        start: (e) => { disc.setAttribute('transform', 'scale(0.97)'); this.onPad(p.index, 'on', pressure(e)); },
-        move: (e) => { const v = pressure(e); if (v !== null) this.onPad(p.index, 'pressure', v); },
-        end: () => { disc.removeAttribute('transform'); this.onPad(p.index, 'off'); },
+        start: (e) => {
+          touches.set(e.pointerId, { at: p.index, bendTo: -1, pos: 0 });
+          press(p.index, true);
+          this.onPad(p.index, 'on', pressure(e));
+        },
+        move: (e) => {
+          const s = touches.get(e.pointerId);
+          if (!s) return;
+          const v = pressure(e);
+          if (v !== null) this.onPad(s.at, 'pressure', v);
+          bend(e, s);
+        },
+        end: (e) => {
+          const s = touches.get(e.pointerId);
+          touches.delete(e.pointerId);
+          if (!s) return;
+          press(s.at, false);
+          this.onPad(s.at, 'off');
+        },
       });
       return light;
     });
@@ -276,14 +324,16 @@ export class Panel {
       const r = this.canvas.getBoundingClientRect();
       return [toPage((e.clientX - r.left) / r.width * 240), toPage((e.clientY - r.top) / r.height * 240)];
     };
-    let lastY = 0;
+    // Drag steps values: up or right raises, down or left lowers (a swipe on
+    // a touch screen); the larger of the two movements counts.
+    let lastX = 0, lastY = 0;
     this.drag(this.canvas, {
-      start: (e) => { lastY = e.clientY; this.onScreen('down', ...at(e)); },
+      start: (e) => { lastX = e.clientX; lastY = e.clientY; this.onScreen('down', ...at(e)); },
       move: (e) => {
         const r = this.canvas.getBoundingClientRect();
-        const dy = (lastY - e.clientY) / r.height * VIEW.size;
-        lastY = e.clientY;
-        this.onScreen('drag', ...at(e), dy);
+        const dx = (e.clientX - lastX) / r.width * VIEW.size, dy = (lastY - e.clientY) / r.height * VIEW.size;
+        lastX = e.clientX; lastY = e.clientY;
+        this.onScreen('drag', ...at(e), Math.abs(dx) > Math.abs(dy) ? dx : dy);
       },
       end: (e) => this.onScreen('up', ...at(e)),
     });
