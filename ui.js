@@ -503,8 +503,9 @@ export class Ui {
   }
 
   // Touch bend from pad index towards target, pos 0..1; off with the
-  // arpeggio and on the preset page, as on the instrument.
-  bendAllowed() { return !this.pr.trilloOn && this.page !== 'preset'; }
+  // arpeggio, as on the instrument. The instrument also turns it off in the
+  // preset menu, where its keys pick slots; here the pads still play there.
+  bendAllowed() { return !this.pr.trilloOn; }
   padBend(index, target, pos) { if (this.bendAllowed()) this.call('keyBend', index, target, pos); }
   // The finger reached the neighbour: the note moves there. False when the
   // bend is off, so the panel keeps the note on its pad.
