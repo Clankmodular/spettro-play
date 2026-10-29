@@ -23,11 +23,17 @@ window.spettro = { ui, panel, display }; // for inspection from the console
 const RATE = 48000;
 
 const TEST = new URLSearchParams(location.search).get('test');
+// ?engine=freezemix: prototype engine where the freeze Probability control
+// is a Mix (built with build.ps1 -FreezeMix); from older firmware sources, so
+// it has no Exciter bank.
+const FREEZE_MIX = RATE === 48000 && new URLSearchParams(location.search).get('engine') === 'freezemix';
 const overlay = document.getElementById('start');
-overlay.querySelector('small').textContent = `audio a ${RATE / 1000} kHz · motore Daisy in WebAssembly`;
+overlay.querySelector('small').textContent = FREEZE_MIX
+  ? 'prototipo: freeze probability → mix · niente Exciter'
+  : `audio a ${RATE / 1000} kHz · motore Daisy in WebAssembly`;
 async function start() {
   overlay.classList.add('starting');
-  const engine = await fetch('spectrum.wasm');
+  const engine = await fetch(FREEZE_MIX ? 'spectrum_freezemix.wasm' : 'spectrum.wasm');
   if (!engine.ok) throw new Error('motore audio non trovato');
   // The 48 kHz engine runs at the device's own rate and the worklet
   // resamples: forcing 48 kHz on an interface at 44.1 kHz makes Safari
