@@ -48,15 +48,31 @@ overlay.addEventListener('click', () => start().catch((err) => {
   console.error(err);
 }));
 
+// ---- Guide ----------------------------------------------------------------
+
+const guide = document.getElementById('guide');
+document.getElementById('guide-open').addEventListener('click', (e) => { e.currentTarget.blur(); guide.showModal(); });
+document.getElementById('guide-close').addEventListener('click', () => guide.close());
+// A click on the backdrop (outside the box) closes it too.
+guide.addEventListener('click', (e) => { if (e.target === guide) guide.close(); });
+
+// Full screen shows the instrument alone (the bar hides; Esc or the system
+// control leaves). Older iPad Safari only has the webkit-prefixed calls.
 const fullscreen = document.getElementById('fullscreen');
+const root = document.documentElement;
+const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement;
 fullscreen.addEventListener('click', () => {
   fullscreen.blur();
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen?.();
+  if (fullscreenElement()) (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+  else (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root);
 });
-document.addEventListener('fullscreenchange', () => {
-  fullscreen.setAttribute('aria-pressed', String(!!document.fullscreenElement));
-});
+const onFullscreen = () => {
+  const on = !!fullscreenElement();
+  fullscreen.setAttribute('aria-pressed', String(on));
+  document.body.classList.toggle('fullscreen', on);
+};
+document.addEventListener('fullscreenchange', onFullscreen);
+document.addEventListener('webkitfullscreenchange', onFullscreen);
 
 // ---- Keyboard mode ------------------------------------------------------
 
@@ -78,7 +94,7 @@ keyboardToggle.addEventListener('click', () => { setKeyboardMode(!keyboardMode);
 
 const held = new Set();
 window.addEventListener('keydown', (e) => {
-  if (e.target.closest?.('select, input')) return;
+  if (e.target.closest?.('select, input') || guide.open) return;
   if (e.code === 'Backquote' || (e.code === 'KeyK' && e.altKey)) { setKeyboardMode(!keyboardMode); e.preventDefault(); return; }
   if (!keyboardMode || e.ctrlKey || e.metaKey || e.altKey) return;
   const pad = PAD_KEYS.indexOf(e.code), fn = FUNCTION_KEYS[e.code];

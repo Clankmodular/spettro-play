@@ -43,6 +43,7 @@ main {
   display: flex; align-items: center; justify-content: center;
   position: relative;
 }
+.fullscreen .bar { display: none; }
 .panel {
   width: 100%; height: 100%; display: block;
   touch-action: none; user-select: none; -webkit-user-select: none;
@@ -64,12 +65,33 @@ main {
 .pad-light { fill: transparent; opacity: 0; pointer-events: none; mix-blend-mode: multiply; transition: opacity 50ms linear; }
 .keyboard-mode .pad circle:first-child { stroke: #555; }
 
-.help {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px 32px;
-  max-width: 1500px; margin: 0 auto; padding: 0 16px 32px; color: var(--muted);
+/* Guide: a modal over the instrument, the box filled by .guide-body, which scrolls. */
+#guide {
+  width: min(880px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0;
+  background: #0d0d0c; color: var(--muted); border: 1px solid var(--line); border-radius: 8px;
 }
-.help h2 { font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); margin: 0 0 4px; }
-.help p { margin: 0; }
+#guide[open] { display: flex; flex-direction: column; }
+#guide::backdrop { background: rgba(0, 0, 0, 0.7); }
+#guide header {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 20px; border-bottom: 1px solid var(--line);
+}
+#guide h1 { font-size: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); margin: 0; }
+#guide-close { border: none; font-size: 16px; padding: 2px 6px; }
+.guide-body {
+  overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px 20px 24px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px 32px;
+}
+.guide-body h2 { font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); margin: 0 0 6px; }
+.guide-body p { margin: 0 0 6px; }
+.guide-body ul { margin: 0; padding-left: 16px; }
+.guide-body li { margin-bottom: 5px; }
+.guide-body b { color: var(--ink); font-weight: 500; }
+/* Colour swatches of the panel lights. */
+.sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: 0; }
+/* Same colours as LED in ui.js. */
+.sw.y { background: #ffb321; } .sw.b { background: #4d9dff; } .sw.g { background: #47d86a; } .sw.r { background: #ff3a2f; }
+.sw.c { background: #36d3dc; } .sw.w { background: #f1efe9; } .sw.o { background: #ff8a1c; }
 kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: inherit; font-size: 11px; color: var(--ink); }
 
 #start {

@@ -14,6 +14,7 @@
     <header class="bar">
       <div class="brand" role="img" aria-label="Clank Spettro"></div>
       <div class="tools">
+        <button id="guide-open" type="button" aria-haspopup="dialog" title="How to play Spettro">guide</button>
         <button id="keyboard-mode" type="button" aria-pressed="false" title="Tastiera del PC come pad (tasto ` per attivare)">keyboard mode</button>
         <label>midi <select id="midi-input"><option>…</option></select></label>
         <label>canale <select id="midi-channel"><option value="0">omni</option></select></label>
@@ -24,21 +25,160 @@
     <main id="instrument"></main>
   </div>
 
-  <section class="help">
-    <div>
-      <h2>keyboard mode</h2>
-      <p><kbd>Q</kbd>…<kbd>I</kbd> fila alta, <kbd>A</kbd>…<kbd>K</kbd> fila centrale, <kbd>Z</kbd>…<kbd>,</kbd> fila bassa ·
-        <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> ottave −2 −1 +1 +2 · <kbd>spazio</kbd> hold · <kbd>5</kbd> arp ·
-        <kbd>6</kbd> rec movimenti · <kbd>`</kbd> attiva/disattiva. La pressione è quella del fader hold.</p>
+  <dialog id="guide" aria-labelledby="guide-title">
+    <header>
+      <h1 id="guide-title">How to play Spettro</h1>
+      <button id="guide-close" type="button" aria-label="Close the guide">✕</button>
+    </header>
+    <div class="guide-body">
+      <section>
+        <h2>Start</h2>
+        <p>Spettro is a spectral synth: an oscillator feeds a bank of up to eight resonant band filters, each with its own
+          envelope and its own delay line. The sound engine is the instrument's own firmware running in the browser.</p>
+        <ul>
+          <li>Click or tap the panel once to switch the audio on. Headphones or good speakers help: much of the sound is in the low and the stereo bands.</li>
+          <li><b>schermo intero</b> leaves only the instrument on the screen; <kbd>Esc</kbd> (or the system control on a tablet) brings the bar back.</li>
+          <li>Chrome, Edge, Firefox and Safari all play it; MIDI needs Chrome, Edge or Firefox on a computer.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Controls</h2>
+        <ul>
+          <li><b>Knobs:</b> drag up or down. <b>Faders:</b> drag along the slot, or touch the slot to jump there.</li>
+          <li><kbd>shift</kbd> while dragging for fine steps, the mouse wheel for single steps, double click for the initial value.</li>
+          <li><b>Buttons</b> work as on the instrument: a short tap and a long press often do different things (listed below).</li>
+          <li>Rings and fader bars light <span class="sw y"></span> yellow up to the value.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Playing the pads</h2>
+        <ul>
+          <li>The 24 pads (3 rows of 8) are tuned to the scale chosen on the keyboard page; five voices are shared by pads and MIDI.</li>
+          <li><b>Pressure:</b> a mouse, a finger or the PC keyboard play with the pressure set by the <b>hold</b> fader, between attack and release.
+            A pen or an Apple Pencil plays with its real pressure; the <b>comb trimmer</b> sets how sensitive it is.</li>
+          <li><b>−2 −1 +1 +2</b> octave: a tap changes octave (tap the lit one again to go back to 0);
+            held for a moment it changes octave only while you hold it.</li>
+          <li><b>Diagonal strip:</b> transpose by scale degrees, ±12. <b>Tuning-fork trimmer:</b> fine tune.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Hold and arpeggio</h2>
+        <ul>
+          <li><b>❄ Hold</b> — tap: latch, the notes keep playing after you lift (LED red); tap again to release them.
+            Hold it while playing: the notes under your fingers are captured only until you let go of ❄ (LED violet).</li>
+          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page (tempo division, pattern, gate length, groove and its amount).
+            With the arpeggio on, Hold pauses and restarts it.</li>
+          <li><b>clock</b> — tap it in time to set the tempo; long press: the tempo page. The LED blinks on the beat.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Oscillators</h2>
+        <ul>
+          <li><b>B fader:</b> the main oscillator's wave. <b>bank</b> button: Classic, Fold, Noise or Exciter, each a different family of waves.</li>
+          <li><b>A fader:</b> the sub oscillator's wave. <b>1/2/4</b>: sub divider (one, two or four octaves down); long press: sub detune.</li>
+          <li><b>blend</b> mixes main and sub; <b>xmod</b> cross-modulates them.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Filter bank</h2>
+        <ul>
+          <li><b>bands:</b> how many bands, shown by the left LED chain.</li>
+          <li><b>shape</b> spreads the bands apart, <b>shift</b> moves them all up or down, <b>reso</b> makes them narrower and more resonant.</li>
+          <li><b>mode</b> button: how the bands are placed — <span class="sw b"></span> fixed, <span class="sw y"></span> harmonic,
+            <span class="sw g"></span> interval, <span class="sw r"></span> inharmonic. While you play, the band chain shows
+            each band's envelope in the mode's colour.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Envelope</h2>
+        <ul>
+          <li><b>attack</b> and <b>release</b> of every note.</li>
+          <li>The button by them opens the band envelope page: attack and release <b>shapes</b> (which bands open or close first)
+            and <b>sustain</b> (which bands stay open while you hold a note; the others pluck). Its LED blinks while the page is open;
+            any other button closes it.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Delay and freeze</h2>
+        <ul>
+          <li><b>Δt</b> delay time, <b>spread</b> how differently each band is delayed, <b>diffuse</b> the reverb.
+            The right LED chain shows each band's delay against the base time: <span class="sw c"></span> shorter,
+            <span class="sw w"></span> equal, <span class="sw o"></span> longer, flashing <span class="sw y"></span> yellow on each echo.</li>
+          <li>The button by Δt — tap: switch the three knobs to <b>freeze</b> (LED and rings red): <b>duration</b> of the frozen fragments,
+            <b>selection</b> of the bands that freeze, <b>probability</b> that a new note freezes them. Frozen bands are <span class="sw r"></span> red on the right chain.
+            Hold it 1 s: delay normal or reverse.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>LFO</h2>
+        <ul>
+          <li><b>amount</b> and <b>speed</b> (white rings); the <b>wave</b> button cycles triangle, ramp down, ramp up, square, random (five LEDs).</li>
+          <li><b>◐ assign</b> — tap: the LED blinks red; now click any knob or fader to give it the LFO (or take it away) —
+            the click does not move the control. Tap ◐ again to finish. Two quick taps without assigning clear every assignment.
+            A modulated control shows its value plus the LFO in white.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Motion loop ‹</h2>
+        <ul>
+          <li>Tap ‹ (orange blinking) and move some controls: each one records its own cycle from its first movement.
+            Tap ‹ again to close the cycles; they keep playing (blue rings and bars).</li>
+          <li>A new take re-records only the controls you move. Moving a looping control by hand removes just its cycle.
+            Double tap ‹ clears every cycle. Loops are saved with presets.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Screen</h2>
+        <ul>
+          <li>Tap or click an item to select it or run it. Change a value with the <kbd>&lt;</kbd> <kbd>&gt;</kbd> arrows at its right edge,
+            the mouse wheel, or by dragging up and down on it. Tap the page title to go back.</li>
+          <li>The resting page is the spectrum analyser.</li>
+          <li><b>system</b> — tap: the keyboard page (scale, the pitch of the last pad, root, fine tuning in cents, pad layout); tap again to go back.
+            Hold 2 s: the System pages (MIDI channel and the four CC assignments, keyboard, setup with factory reset and preset export).</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Presets</h2>
+        <ul>
+          <li><b>preset</b> opens the preset page: choose the bank (BNK) and the preset (PRS), or tap a slot in the grid, then <b>load</b> or <b>save</b>.
+            The pads keep playing while the page is open.</li>
+          <li>Bank 0 holds the 24 factory presets and cannot be overwritten; banks 1–31 are yours and stay in this browser
+            (export them from System → setup).</li>
+          <li>Tapping <b>preset</b> twice quickly on the preset page brings back the sound you had before opening it.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>MIDI</h2>
+        <ul>
+          <li>Choose the input and the channel in the top bar. Notes follow the pads' tuning; Hold and the arpeggiator work on MIDI notes too.</li>
+          <li>Four CCs can be assigned to controls (System → midi). Program change selects presets: bank = 1 + the whole part of program ÷ 24, preset = program mod 24 + 1.</li>
+          <li>iPad and iPhone browsers have no MIDI access.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Keyboard mode</h2>
+        <p>The <b>keyboard mode</b> button, or <kbd>`</kbd>, turns the PC keyboard into the pads:</p>
+        <ul>
+          <li><kbd>Q</kbd>…<kbd>I</kbd> top row, <kbd>A</kbd>…<kbd>K</kbd> middle row, <kbd>Z</kbd>…<kbd>,</kbd> bottom row.</li>
+          <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> octave −2 −1 +1 +2, <kbd>space</kbd> Hold, <kbd>5</kbd> arp, <kbd>6</kbd> motion loop.</li>
+          <li>Many PC keyboards cannot read every chord of three or more keys.</li>
+        </ul>
+      </section>
     </div>
-    <div>
-      <h2>pannello</h2>
-      <p>Trascina manopole e fader (<kbd>shift</kbd> per la regolazione fine), rotella per i passi, doppio clic per il valore iniziale.
-        Sul display: clic su una voce per selezionarla, frecce <kbd>&lt;</kbd> <kbd>&gt;</kbd>, rotella o trascinamento per cambiarla,
-        clic sul titolo per tornare indietro. I gesti dei pulsanti sono quelli dello strumento: tocco breve e pressione lunga
-        (1/2/4 tenuto apre il sub detune).</p>
-    </div>
-  </section>
+  </dialog>
 
   <div id="start" role="button" tabindex="0">
     <div>
