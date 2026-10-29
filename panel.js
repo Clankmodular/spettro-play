@@ -366,19 +366,26 @@ export class Panel {
   // Move a control without reporting it (preset recall, bank switch).
   set(id, v) { this.controls[id]?.set(clamp01(v)); }
 
-  // LED colour as CSS colour and brightness 0..1.
+  // LED colour as CSS colour and brightness 0..1. Unchanged lights are not
+  // touched: every style write makes the browser redraw.
   light(id, color, level = 1) {
     const node = this.leds[id];
     if (!node) return;
-    if (!level || !color) { node.removeAttribute('style'); node.classList.remove('on'); return; }
+    const key = !level || !color ? '' : `${color}${Math.round(level * 100)}`;
+    if (node.lit === key) return;
+    node.lit = key;
+    if (!key) { node.removeAttribute('style'); node.classList.remove('on'); return; }
     node.classList.add('on');
     node.style.fill = color;
-    node.style.opacity = String(0.25 + 0.75 * level);
+    node.style.opacity = String(0.25 + 0.75 * Math.round(level * 100) / 100);
   }
 
   padLight(index, color, level) {
     const node = this.padNodes[index];
+    const key = color ? `${color}${Math.round(level * 100)}` : '';
+    if (node.lit === key) return;
+    node.lit = key;
     node.style.fill = color || 'transparent';
-    node.style.opacity = color ? String(level) : '0';
+    node.style.opacity = color ? String(Math.round(level * 100) / 100) : '0';
   }
 }

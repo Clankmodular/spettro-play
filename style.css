@@ -63,6 +63,14 @@ main {
 .value-light { fill: #ffb321; stroke: #ffb321; }
 .window-lit { filter: url(#glow); }
 .pad-light { fill: transparent; opacity: 0; pointer-events: none; mix-blend-mode: multiply; transition: opacity 50ms linear; }
+/* Touch devices (iPad): Safari draws the audio in the same process as the
+   graphics, and SVG blur filters and blending redrawn every frame made it
+   crackle. Lights stay, without glow; pads tint without blending. */
+@media (pointer: coarse) {
+  .led.on, .window-lit { filter: none; }
+  .led { transition: none; }
+  .pad-light { mix-blend-mode: normal; transition: none; }
+}
 .keyboard-mode .pad circle:first-child { stroke: #555; }
 
 /* Guide: a modal over the instrument, the box filled by .guide-body, which scrolls. */
@@ -96,7 +104,8 @@ kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: i
 
 #start {
   position: fixed; inset: 0; display: grid; place-items: center; cursor: pointer;
-  background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(3px);
+  /* No backdrop blur: redrawn over the whole panel it costs the iPad audio. */
+  background: rgba(0, 0, 0, 0.8);
   text-align: center;
 }
 #start p { font-size: 20px; letter-spacing: 0.12em; margin: 0 0 6px; }

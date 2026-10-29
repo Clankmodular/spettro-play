@@ -724,9 +724,14 @@ export class Ui {
     this.bpm = data.status.bpm;
   }
 
+  // Lights and screen at about 30 fps (the status arrives at 30 Hz); a 60 or
+  // 120 Hz display would only redraw more, which costs the iPad audio.
   frame() {
     requestAnimationFrame(() => this.frame());
     this.loopPlay();
+    const t = now();
+    if (t - (this.drawnAt || 0) < 30) return;
+    this.drawnAt = t;
     if (!this.state) { this.display.render(null); return; }
     this.leds();
     this.drawDisplay();
