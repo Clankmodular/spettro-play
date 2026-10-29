@@ -13,6 +13,7 @@ import { Presets, SLOTS } from './presets.js';
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
 const ADC_TUNE = 7, ADC_MASTER = 8;
+const LATENCY_KEY = 'spettro.latency';
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const BANK_ORDER = [0, 2, 3, 1]; // Classic, Fold, Noise, Exciter (oscillator::Next)
 const LFO_WAVES = ['tri', 'ramp', 'saw', 'square', 'random']; // Daisy waves 1..5
@@ -903,8 +904,28 @@ export class Ui {
         ['destination', CC_DESTS.find(([d]) => d === pr.ccAssignDest[i])?.[1] || 'none', { step: (n) => this.editCc(0, n) }],
         ['amount', `${pr.ccAssignAmount[i]}%`, { step: (n) => this.editCc(1, n) }]], '', () => { this.systemPage = 'midi'; });
     }
+    // Audio check (web): engine load over the last second and the worst
+    // render quantum, both in % of the time available; output latency, and a
+    // tap that switches to the larger, safer buffer (reloads the page).
+    const load = this.state?.load, c = this.ctx;
+    const latency = c ? Math.round(((c.baseLatency || 0) + (c.outputLatency || 0)) * 1000) : 0;
+    const safe = this.latencyHint() === 'playback';
     return P.drawListPage(ctx, 'setup', this.menus.setup, [
       ['fact. reset', '', { click: () => { this.factoryReset(); this.display.show('factory reset', 1000); } }],
-      ['export presets', '', { click: () => this.exportPresets() }]], '', toSystem);
+      ['export presets', '', { click: () => this.exportPresets() }],
+      ['audio load', load ? `${Math.round(load.load * 100)}% pk ${Math.round(load.peak * 100)}%` : '-'],
+      [safe ? 'latency safe' : 'latency low', c ? `${latency} ms` : '-', { click: () => this.setLatencyHint(safe ? 'interactive' : 'playback') }]],
+    '', toSystem);
+  }
+
+  // Audio buffer: 'interactive' (lowest latency) or 'playback' (larger and
+  // safer against crackles on slow or busy devices). Read at audio start.
+  latencyHint() {
+    try { return localStorage.getItem(LATENCY_KEY) === 'playback' ? 'playback' : 'interactive'; } catch { return 'interactive'; }
+  }
+
+  setLatencyHint(hint) {
+    try { localStorage.setItem(LATENCY_KEY, hint); } catch { /* not stored: stays as it is */ }
+    location.reload();
   }
 }

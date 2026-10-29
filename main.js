@@ -28,7 +28,7 @@ async function start() {
   overlay.classList.add('starting');
   const engine = await fetch('spectrum.wasm');
   if (!engine.ok) throw new Error('motore audio non trovato');
-  const ctx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' });
+  const ctx = new AudioContext({ sampleRate: RATE, latencyHint: ui.latencyHint() });
   const [module] = await Promise.all([
     WebAssembly.compileStreaming(engine),
     ctx.audioWorklet.addModule('engine-worklet.js'),

@@ -36,6 +36,14 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.fifoL = new Float32Array(this.blockFrames * 4);
     this.fifoR = new Float32Array(this.blockFrames * 4);
     this.fifoCount = 0;
+    // Views into the engine's memory, made once: it never grows, and
+    // allocating on the audio thread risks garbage-collection pauses.
+    this.outPtr = -1;
+    this.lights = new Float32Array(this.mem.buffer, e.spectrum_lights(), 16);
+    this.tapLights = this.lights.subarray(8, 16);
+    // Load: time spent in process() against the audio time it produced,
+    // over about a second (Date.now is coarse, the sum is not biased).
+    this.load = { work: 0, frames: 0, peak: 0, last: { load: 0, peak: 0 } };
 
     this.port.onmessage = ({ data }) => this.message(data);
     this.port.postMessage({ type: 'ready' });
@@ -85,7 +93,9 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   renderBlock() {
     if (this.sinceFrame >= FRAME_SAMPLES) { this.sinceFrame -= FRAME_SAMPLES; this.sendFrame(); }
     const n = this.blockFrames;
-    const out = new Float32Array(this.mem.buffer, this.e.spectrum_render(), 2 * n);
+    const ptr = this.e.spectrum_render();
+    if (ptr !== this.outPtr) { this.outPtr = ptr; this.out = new Float32Array(this.mem.buffer, ptr, 2 * n); }
+    const out = this.out;
     for (let i = 0; i < n; i++) {
       this.fifoL[this.fifoCount + i] = out[2 * i];
       this.fifoR[this.fifoCount + i] = out[2 * i + 1];
@@ -95,21 +105,20 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.sinceStatus += n;
     if (this.sinceStatus >= STATUS_SAMPLES) {
       this.sinceStatus = 0;
-      const lights = new Float32Array(this.mem.buffer, this.e.spectrum_lights(), 16);
-      const taps = Array.from(lights.subarray(8, 16));
+      const lights = this.lights, pr = this.controller.pr;
+      // Only the preset fields the page reads (it mirrors the rest itself).
       this.port.postMessage({ type: 'status', status: this.controller.status(), reply: this.reply.slice(),
-        pr: this.controller.pr, geometry: this.geometry(),
-        bandLevels: Array.from(lights.subarray(0, 8)), taps, delayHits: this.hits });
+        pr: { latchedNote: pr.latchedNote, trilloOn: pr.trilloOn, spectralMode: pr.spectralMode, oscBank: pr.oscBank },
+        geometry: this.geometry(), bandLevels: Array.from(lights.subarray(0, 8)),
+        taps: Array.from(lights.subarray(8, 16)), delayHits: this.hits, load: this.load.last });
       this.hits = 0;
     }
     // Hits are collected every block so short flashes are not missed.
-    if (this.controller.attacks.length) {
-      const taps = new Float32Array(this.mem.buffer, this.e.spectrum_lights(), 16).subarray(8, 16);
-      this.hits = (this.hits || 0) | this.controller.delayHits(taps);
-    }
+    if (this.controller.attacks.length) this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights);
   }
 
   process(_inputs, outputs) {
+    const t0 = Date.now();
     const [left, right] = outputs[0];
     const quantum = left.length;
     while (this.fifoCount < quantum) this.renderBlock();
@@ -118,6 +127,13 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.fifoL.copyWithin(0, quantum, this.fifoCount);
     this.fifoR.copyWithin(0, quantum, this.fifoCount);
     this.fifoCount -= quantum;
+    const L = this.load, spent = Date.now() - t0;
+    L.work += spent; L.frames += quantum; L.peak = Math.max(L.peak, spent);
+    if (L.frames >= sampleRate) {
+      const audioMs = L.frames / sampleRate * 1000;
+      L.last = { load: L.work / audioMs, peak: L.peak / (quantum / sampleRate * 1000) };
+      L.work = 0; L.frames = 0; L.peak = 0;
+    }
     return true;
   }
 }
