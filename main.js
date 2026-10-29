@@ -27,6 +27,8 @@ const TEST = new URLSearchParams(location.search).get('test');
 // is a Mix (built with build.ps1 -FreezeMix); from older firmware sources, so
 // it has no Exciter bank.
 const FREEZE_MIX = RATE === 48000 && new URLSearchParams(location.search).get('engine') === 'freezemix';
+// The freeze legend under "diffuse" reads "mix" on the prototype.
+if (FREEZE_MIX) panel.relabel([696, 196.6, 736, 206], 'mix', 716.25, 203.35);
 const overlay = document.getElementById('start');
 overlay.querySelector('small').textContent = FREEZE_MIX
   ? 'prototipo: freeze probability → mix · niente Exciter'

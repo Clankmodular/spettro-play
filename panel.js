@@ -363,6 +363,15 @@ export class Panel {
     this.onControl(id, v);
   }
 
+  // Cover a printed legend (box in panel units, panel colour) and write
+  // another one centred on x at baseline y, for prototype engines.
+  relabel([x0, y0, x1, y1], text, x, y) {
+    el('rect', { x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: '#262626', 'pointer-events': 'none' }, this.svg);
+    const label = el('text', { x, y, 'text-anchor': 'middle', fill: '#e8e6e1', 'font-size': 8.6,
+      'font-family': "'IBM Plex Mono', ui-monospace, monospace", 'pointer-events': 'none' }, this.svg);
+    label.textContent = text;
+  }
+
   // Move a control without reporting it (preset recall, bank switch).
   set(id, v) { this.controls[id]?.set(clamp01(v)); }
 
