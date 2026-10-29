@@ -221,10 +221,16 @@ export class Ui {
     if (this.lfoLearn.learning && down && id.startsWith('oct')) { this.toggleLfo(DEST.Octave); this.lfoLearn.touched = true; b.consumed = true; return; }
 
     switch (id) {
+      // Tap: change octave (the lit one again: back to 0). Held 300 ms or
+      // more (web only): momentary, the release restores the previous octave
+      // unless another octave button has changed it meanwhile.
       case 'octDown2': case 'octDown1': case 'octUp1': case 'octUp2': {
-        if (!down) return;
-        const index = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 }[id];
-        this.set({ octaveIndex: this.pr.octaveIndex === index ? 3 : index });
+        if (down) {
+          const index = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 }[id];
+          b.previous = this.pr.octaveIndex;
+          b.octave = this.pr.octaveIndex === index ? 3 : index;
+          this.set({ octaveIndex: b.octave });
+        } else if (!b.consumed && held >= 300 && this.pr.octaveIndex === b.octave) this.set({ octaveIndex: b.previous });
         return;
       }
       case 'hold': return this.call(down ? 'holdDown' : 'holdUp');
