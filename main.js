@@ -28,13 +28,16 @@ async function start() {
   overlay.classList.add('starting');
   const engine = await fetch('spectrum.wasm');
   if (!engine.ok) throw new Error('motore audio non trovato');
-  const ctx = new AudioContext({ sampleRate: RATE, latencyHint: ui.latencyHint() });
+  // The 48 kHz engine runs at the device's own rate and the worklet
+  // resamples: forcing 48 kHz on an interface at 44.1 kHz makes Safari
+  // resample, which crackles on iPad.
+  const ctx = new AudioContext({ latencyHint: ui.latencyHint(), ...(RATE !== 48000 && { sampleRate: RATE }) });
   const [module] = await Promise.all([
     WebAssembly.compileStreaming(engine),
     ctx.audioWorklet.addModule('engine-worklet.js'),
   ]);
   const node = new AudioWorkletNode(ctx, 'spectrum-engine', {
-    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module },
+    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module, engineRate: RATE },
   });
   node.connect(ctx.destination);
   await new Promise((resolve) => {

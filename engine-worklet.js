@@ -8,15 +8,20 @@
 
 import { Controller, FRAME } from './esp/controller.js';
 
-// sampleRate is the AudioContext rate: 48 kHz, matching the engine.
-const FRAME_SAMPLES = Math.round(sampleRate * 0.005);
-const STATUS_SAMPLES = Math.round(sampleRate / 30); // ~33 ms
+// The engine runs at engineRate (48 kHz); sampleRate,
+// the device's rate, may differ (44.1 kHz interfaces): then process()
+// resamples. Frame and status timing count engine samples.
 
 class SpectrumProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     // Compiled on the main thread; instantiating here keeps memory local.
-    const { module } = options.processorOptions;
+    const { module, engineRate = sampleRate } = options.processorOptions;
+    this.frameSamples = Math.round(engineRate * 0.005);
+    this.statusSamples = Math.round(engineRate / 30); // ~33 ms
+    // Engine samples per output sample; 1 plays the engine straight through.
+    this.step = engineRate / sampleRate;
+    this.phase = 1; // read position in the FIFO, one sample of history behind
     const stub = new Proxy({}, { get: () => () => 0 });
     const imports = new Proxy({}, { get: () => stub });
     const instance = new WebAssembly.Instance(module, imports);
@@ -29,16 +34,19 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.blockFrames = e.spectrum_block_frames();
     this.controller = new Controller();
     this.reply = new Uint8Array(FRAME);
-    this.sinceFrame = FRAME_SAMPLES;
+    this.sinceFrame = this.frameSamples;
     this.sinceStatus = 0;
 
-    // Engine renders 96-frame blocks; the browser asks for 128-frame quanta.
-    this.fifoL = new Float32Array(this.blockFrames * 4);
-    this.fifoR = new Float32Array(this.blockFrames * 4);
+    // Engine renders 96-frame blocks; the browser asks for 128-frame quanta,
+    // more engine samples than that when resampling down.
+    this.fifoL = new Float32Array(this.blockFrames * 12);
+    this.fifoR = new Float32Array(this.blockFrames * 12);
     this.fifoCount = 0;
     // Views into the engine's memory, made once: it never grows, and
     // allocating on the audio thread risks garbage-collection pauses.
     this.outPtr = -1;
+    // spectrum_lights() computes the lights into a static buffer: call it each
+    // time, read it through these views.
     this.lights = new Float32Array(this.mem.buffer, e.spectrum_lights(), 16);
     this.tapLights = this.lights.subarray(8, 16);
     // Load: time spent in process() against the audio time it produced,
@@ -91,7 +99,7 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   }
 
   renderBlock() {
-    if (this.sinceFrame >= FRAME_SAMPLES) { this.sinceFrame -= FRAME_SAMPLES; this.sendFrame(); }
+    if (this.sinceFrame >= this.frameSamples) { this.sinceFrame -= this.frameSamples; this.sendFrame(); }
     const n = this.blockFrames;
     const ptr = this.e.spectrum_render();
     if (ptr !== this.outPtr) { this.outPtr = ptr; this.out = new Float32Array(this.mem.buffer, ptr, 2 * n); }
@@ -103,8 +111,9 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.fifoCount += n;
     this.sinceFrame += n;
     this.sinceStatus += n;
-    if (this.sinceStatus >= STATUS_SAMPLES) {
+    if (this.sinceStatus >= this.statusSamples) {
       this.sinceStatus = 0;
+      this.e.spectrum_lights();
       const lights = this.lights, pr = this.controller.pr;
       // Only the preset fields the page reads (it mirrors the rest itself).
       this.port.postMessage({ type: 'status', status: this.controller.status(), reply: this.reply.slice(),
@@ -114,19 +123,21 @@ class SpectrumProcessor extends AudioWorkletProcessor {
       this.hits = 0;
     }
     // Hits are collected every block so short flashes are not missed.
-    if (this.controller.attacks.length) this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights);
+    if (this.controller.attacks.length) { this.e.spectrum_lights(); this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights); }
   }
 
   process(_inputs, outputs) {
     const t0 = Date.now();
     const [left, right] = outputs[0];
     const quantum = left.length;
-    while (this.fifoCount < quantum) this.renderBlock();
-    left.set(this.fifoL.subarray(0, quantum));
-    if (right) right.set(this.fifoR.subarray(0, quantum));
-    this.fifoL.copyWithin(0, quantum, this.fifoCount);
-    this.fifoR.copyWithin(0, quantum, this.fifoCount);
-    this.fifoCount -= quantum;
+    if (this.step === 1) {
+      while (this.fifoCount < quantum) this.renderBlock();
+      left.set(this.fifoL.subarray(0, quantum));
+      if (right) right.set(this.fifoR.subarray(0, quantum));
+      this.fifoL.copyWithin(0, quantum, this.fifoCount);
+      this.fifoR.copyWithin(0, quantum, this.fifoCount);
+      this.fifoCount -= quantum;
+    } else this.resample(left, right, quantum);
     const L = this.load, spent = Date.now() - t0;
     L.work += spent; L.frames += quantum; L.peak = Math.max(L.peak, spent);
     if (L.frames >= sampleRate) {
@@ -135,6 +146,27 @@ class SpectrumProcessor extends AudioWorkletProcessor {
       L.work = 0; L.frames = 0; L.peak = 0;
     }
     return true;
+  }
+
+  // Engine rate to device rate, 4-point Catmull-Rom interpolation around the
+  // read position (one sample of history before it, two after).
+  resample(left, right, quantum) {
+    const fl = this.fifoL, fr = this.fifoR;
+    const cubic = (a, b, c, d, x) => b + 0.5 * x * (c - a + x * (2 * a - 5 * b + 4 * c - d + x * (3 * (b - c) + d - a)));
+    let phase = this.phase;
+    for (let i = 0; i < quantum; i++) {
+      const n = Math.floor(phase), x = phase - n;
+      while (this.fifoCount < n + 3) this.renderBlock();
+      left[i] = cubic(fl[n - 1], fl[n], fl[n + 1], fl[n + 2], x);
+      if (right) right[i] = cubic(fr[n - 1], fr[n], fr[n + 1], fr[n + 2], x);
+      phase += this.step;
+    }
+    // Keep one sample of history before the next read position.
+    const drop = Math.floor(phase) - 1;
+    fl.copyWithin(0, drop, this.fifoCount);
+    fr.copyWithin(0, drop, this.fifoCount);
+    this.fifoCount -= drop;
+    this.phase = phase - drop;
   }
 }
 

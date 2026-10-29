@@ -937,7 +937,7 @@ export class Ui {
       ['fact. reset', '', { click: () => { this.factoryReset(); this.display.show('factory reset', 1000); } }],
       ['export presets', '', { click: () => this.exportPresets() }],
       ['audio load', load ? `${Math.round(load.load * 100)}% pk ${Math.round(load.peak * 100)}%` : '-'],
-      [safe ? 'latency safe' : 'latency low', c ? `${latency} ms` : '-', { click: () => this.setLatencyHint(safe ? 'interactive' : 'playback') }]],
+      [safe ? 'latency safe' : 'latency low', c ? `${latency}ms ${c.sampleRate / 1000}k` : '-', { click: () => this.setLatencyHint(safe ? 'interactive' : 'playback') }]],
     '', toSystem);
   }
 
