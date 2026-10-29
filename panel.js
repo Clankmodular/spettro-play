@@ -250,12 +250,27 @@ export class Panel {
   }
 
   // The screen window of the panel; mouse in its own 240 x 240 units.
+  // The canvas is an HTML element over the SVG, not a foreignObject:
+  // WebKit (every iPad browser) draws foreignObject content without the
+  // viewBox transform, so the screen and its touches landed elsewhere.
   screen() {
     const { x, y, size } = L.DISPLAY;
-    const fo = el('foreignObject', { x, y, width: size, height: size }, this.svg);
+    const container = this.svg.parentNode;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'screen';
-    fo.appendChild(this.canvas);
+    container.appendChild(this.canvas);
+    const place = () => {
+      const m = this.svg.getScreenCTM();
+      if (!m) return;
+      const box = container.getBoundingClientRect();
+      Object.assign(this.canvas.style, {
+        left: `${m.a * x + m.e - box.left}px`, top: `${m.d * y + m.f - box.top}px`,
+        width: `${m.a * size}px`, height: `${m.d * size}px`,
+      });
+    };
+    place();
+    new ResizeObserver(place).observe(this.svg);
+    window.addEventListener('resize', place);
     // Canvas position to page units (the screen shows a zoomed view).
     const at = (e) => {
       const r = this.canvas.getBoundingClientRect();
