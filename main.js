@@ -1,0 +1,134 @@
+// Spettro web: audio start-up and the wiring between panel, display,
+// PC keyboard, MIDI and the ESP32 port running in the AudioWorklet.
+
+import { Panel } from './panel.js';
+import { Display } from './display.js';
+import { Ui } from './ui.js';
+
+const panel = new Panel(document.getElementById('instrument'), {
+  onControl: (id, v) => ui.control(id, v),
+  onTouch: (id) => ui.touchControl(id),
+  onButton: (id, down) => ui.button(id, down),
+  onPad: (index, action, pressure) => ui.pad(index, action, pressure),
+  onScreen: (type, x, y, arg, fine) => ui.screen(type, x, y, arg, fine),
+});
+const display = new Display(panel.canvas);
+const ui = new Ui(panel, display);
+window.spettro = { ui, panel, display }; // for inspection from the console
+
+// ---- Audio ----------------------------------------------------------------
+
+const RATE = 48000;
+
+const overlay = document.getElementById('start');
+overlay.querySelector('small').textContent = `audio a ${RATE / 1000} kHz · motore Daisy in WebAssembly`;
+async function start() {
+  overlay.classList.add('starting');
+  const engine = await fetch('spectrum.wasm');
+  if (!engine.ok) throw new Error('motore audio non trovato');
+  const ctx = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' });
+  const [module] = await Promise.all([
+    WebAssembly.compileStreaming(engine),
+    ctx.audioWorklet.addModule('engine-worklet.js'),
+  ]);
+  const node = new AudioWorkletNode(ctx, 'spectrum-engine', {
+    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module },
+  });
+  node.connect(ctx.destination);
+  await new Promise((resolve) => {
+    node.port.onmessage = ({ data }) => { if (data.type === 'ready') resolve(); };
+  });
+  node.port.onmessage = ({ data }) => { if (data.type === 'status') ui.status(data); };
+  ui.attach(node.port, ctx);
+  overlay.remove();
+  document.body.classList.add('running');
+}
+overlay.addEventListener('click', () => start().catch((err) => {
+  overlay.querySelector('p').textContent = `Impossibile avviare l'audio: ${err.message}`;
+  console.error(err);
+}));
+
+const fullscreen = document.getElementById('fullscreen');
+fullscreen.addEventListener('click', () => {
+  fullscreen.blur();
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.();
+});
+document.addEventListener('fullscreenchange', () => {
+  fullscreen.setAttribute('aria-pressed', String(!!document.fullscreenElement));
+});
+
+// ---- Keyboard mode ------------------------------------------------------
+
+// Pad rows on the three letter rows; function keys as the panel buttons.
+const PAD_KEYS = ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI',
+  'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK',
+  'KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Comma'];
+const FUNCTION_KEYS = { Digit1: 'octDown2', Digit2: 'octDown1', Digit3: 'octUp1', Digit4: 'octUp2',
+  Space: 'hold', Digit5: 'arp', Digit6: 'loop' };
+const keyboardToggle = document.getElementById('keyboard-mode');
+let keyboardMode = false;
+const setKeyboardMode = (on) => {
+  keyboardMode = on;
+  keyboardToggle.setAttribute('aria-pressed', String(on));
+  document.body.classList.toggle('keyboard-mode', on);
+  if (!on) ui.releaseAllKeys();
+};
+keyboardToggle.addEventListener('click', () => { setKeyboardMode(!keyboardMode); keyboardToggle.blur(); });
+
+const held = new Set();
+window.addEventListener('keydown', (e) => {
+  if (e.target.closest?.('select, input')) return;
+  if (e.code === 'Backquote' || (e.code === 'KeyK' && e.altKey)) { setKeyboardMode(!keyboardMode); e.preventDefault(); return; }
+  if (!keyboardMode || e.ctrlKey || e.metaKey || e.altKey) return;
+  const pad = PAD_KEYS.indexOf(e.code), fn = FUNCTION_KEYS[e.code];
+  if (pad < 0 && !fn) return;
+  e.preventDefault();
+  if (e.repeat || held.has(e.code)) return;
+  held.add(e.code);
+  if (pad >= 0) ui.pad(pad, 'on', null, 'keyboard');
+  else ui.button(fn, true);
+});
+window.addEventListener('keyup', (e) => {
+  if (!held.delete(e.code)) return;
+  const pad = PAD_KEYS.indexOf(e.code), fn = FUNCTION_KEYS[e.code];
+  if (pad >= 0) ui.pad(pad, 'off', null, 'keyboard');
+  else if (fn) ui.button(fn, false);
+});
+window.addEventListener('blur', () => {
+  for (const code of held) {
+    const pad = PAD_KEYS.indexOf(code), fn = FUNCTION_KEYS[code];
+    if (pad >= 0) ui.pad(pad, 'off', null, 'keyboard');
+    else if (fn) ui.button(fn, false);
+  }
+  held.clear();
+});
+
+// ---- MIDI -------------------------------------------------------------------
+
+const midiSelect = document.getElementById('midi-input');
+const channelSelect = document.getElementById('midi-channel');
+let midiAccess = null;
+function refreshMidi() {
+  const current = midiSelect.value;
+  midiSelect.innerHTML = '';
+  const all = new Option('tutti gli ingressi', 'all');
+  midiSelect.add(all);
+  for (const input of midiAccess.inputs.values()) midiSelect.add(new Option(input.name, input.id));
+  midiSelect.value = [...midiSelect.options].some((o) => o.value === current) ? current : 'all';
+  for (const input of midiAccess.inputs.values())
+    input.onmidimessage = (e) => { if (midiSelect.value === 'all' || midiSelect.value === input.id) ui.midi(Array.from(e.data), e.timeStamp); };
+}
+if (navigator.requestMIDIAccess) {
+  navigator.requestMIDIAccess().then((access) => {
+    midiAccess = access;
+    refreshMidi();
+    access.onstatechange = refreshMidi;
+  }).catch(() => { midiSelect.innerHTML = '<option>MIDI non disponibile</option>'; midiSelect.disabled = true; });
+} else {
+  midiSelect.innerHTML = '<option>MIDI non supportato</option>';
+  midiSelect.disabled = true;
+}
+for (let ch = 1; ch <= 16; ch++) channelSelect.add(new Option(`canale ${ch}`, String(ch)));
+channelSelect.addEventListener('change', () => ui.setMidiChannel(Number(channelSelect.value)));
+ui.onMidiChannel = (ch) => { channelSelect.value = String(ch); };

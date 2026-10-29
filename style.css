@@ -1,0 +1,85 @@
+/* Black page: the synth screen (black too) blends into the background. */
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --ink: #e8e3dd;
+  --muted: #8f8a84;
+  --line: #2c2b2a;
+  --accent: #e8e3dd;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 'IBM Plex Mono', ui-monospace, monospace;
+  min-height: 100vh;
+}
+.bar {
+  display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
+  padding: 6px 16px; border-bottom: 1px solid var(--line);
+}
+/* Panel logo, stroked in the text colour (logo.svg uses currentColor). */
+.brand {
+  width: 180px; height: 22px; background: var(--ink);
+  -webkit-mask: url(logo.svg) left center / contain no-repeat; mask: url(logo.svg) left center / contain no-repeat;
+}
+.tools { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.tools label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+select, button {
+  font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+  border-radius: 4px; padding: 4px 8px; max-width: 220px;
+}
+button { cursor: pointer; }
+button[aria-pressed="true"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
+/* Bar and panel fill the window exactly; the panel scales to fit both ways. */
+.stage { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+/* The synth as large as the window allows, in width or height. */
+main {
+  flex: 1 1 auto; min-height: 0;
+  padding: 8px;
+  display: flex; align-items: center; justify-content: center;
+}
+.panel {
+  width: 100%; height: 100%; display: block;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.panel.off .leds, .panel.off .screen { opacity: 0.15; }
+.control { cursor: grab; }
+.control:active { cursor: grabbing; }
+.button, .pad { cursor: pointer; }
+.knob:hover circle:nth-child(1), .fader:hover line { outline: none; }
+.screen { width: 100%; height: 100%; display: block; background: #000; touch-action: none; border-radius: 4%; }
+
+/* Light windows: dark when off, lit inside the printed outline. */
+.led, .window-off { fill: rgba(24, 22, 21, 0.66); }
+.led { transition: opacity 60ms linear; }
+.led.on { filter: url(#glow); }
+.value-light { fill: #ffb321; stroke: #ffb321; }
+.window-lit { filter: url(#glow); }
+.pad-light { fill: transparent; opacity: 0; pointer-events: none; mix-blend-mode: multiply; transition: opacity 50ms linear; }
+.keyboard-mode .pad circle:first-child { stroke: #555; }
+
+.help {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px 32px;
+  max-width: 1500px; margin: 0 auto; padding: 0 16px 32px; color: var(--muted);
+}
+.help h2 { font-size: 12px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); margin: 0 0 4px; }
+.help p { margin: 0; }
+kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: inherit; font-size: 11px; color: var(--ink); }
+
+#start {
+  position: fixed; inset: 0; display: grid; place-items: center; cursor: pointer;
+  background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(3px);
+  text-align: center;
+}
+#start p { font-size: 20px; letter-spacing: 0.12em; margin: 0 0 6px; }
+#start small { color: var(--muted); }
+#start.starting { cursor: progress; }
+
+@media (max-width: 700px) {
+  .bar { padding: 10px 16px; }
+  main { padding: 8px 0; }
+}
