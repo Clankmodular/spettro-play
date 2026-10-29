@@ -16,7 +16,9 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     // Compiled on the main thread; instantiating here keeps memory local.
-    const { module, engineRate = sampleRate } = options.processorOptions;
+    const { module, engineRate = sampleRate, testTone = false } = options.processorOptions;
+    this.testTone = testTone; // ?test=tone: a plain sine, the engine idle
+    this.tonePhase = 0;
     this.frameSamples = Math.round(engineRate * 0.005);
     this.statusSamples = Math.round(engineRate / 30); // ~33 ms
     // Engine samples per output sample; 1 plays the engine straight through.
@@ -130,7 +132,11 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     const t0 = Date.now();
     const [left, right] = outputs[0];
     const quantum = left.length;
-    if (this.step === 1) {
+    if (this.testTone) {
+      const inc = 2 * Math.PI * 440 / sampleRate;
+      for (let i = 0; i < quantum; i++) { left[i] = 0.25 * Math.sin(this.tonePhase); this.tonePhase = (this.tonePhase + inc) % (2 * Math.PI); }
+      if (right) right.set(left);
+    } else if (this.step === 1) {
       while (this.fifoCount < quantum) this.renderBlock();
       left.set(this.fifoL.subarray(0, quantum));
       if (right) right.set(this.fifoR.subarray(0, quantum));

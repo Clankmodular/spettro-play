@@ -22,6 +22,7 @@ window.spettro = { ui, panel, display }; // for inspection from the console
 
 const RATE = 48000;
 
+const TEST = new URLSearchParams(location.search).get('test');
 const overlay = document.getElementById('start');
 overlay.querySelector('small').textContent = `audio a ${RATE / 1000} kHz · motore Daisy in WebAssembly`;
 async function start() {
@@ -32,14 +33,26 @@ async function start() {
   // resamples: forcing 48 kHz on an interface at 44.1 kHz makes Safari
   // resample, which crackles on iPad.
   const ctx = new AudioContext({ latencyHint: ui.latencyHint(), ...(RATE !== 48000 && { sampleRate: RATE }) });
+  // Audio checks for crackles: ?test=osc plays a browser sine (none of our
+  // code on the audio thread), ?test=tone a sine from the worklet without
+  // the engine. The panel stays silent in both.
+  if (TEST === 'osc') {
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.frequency.value = 440; gain.gain.value = 0.25;
+    osc.connect(gain).connect(ctx.destination); osc.start();
+    overlay.querySelector('p').textContent = `test: browser sine 440 Hz at ${ctx.sampleRate / 1000} kHz`;
+    overlay.style.pointerEvents = 'none'; // one sine only
+    return;
+  }
   const [module] = await Promise.all([
     WebAssembly.compileStreaming(engine),
     ctx.audioWorklet.addModule('engine-worklet.js'),
   ]);
   const node = new AudioWorkletNode(ctx, 'spectrum-engine', {
-    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module, engineRate: RATE },
+    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module, engineRate: RATE, testTone: TEST === 'tone' },
   });
   node.connect(ctx.destination);
+  window.spettro.node = node;
   await new Promise((resolve) => {
     node.port.onmessage = ({ data }) => { if (data.type === 'ready') resolve(); };
   });
