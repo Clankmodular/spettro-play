@@ -27,7 +27,7 @@ const PLOT_HEIGHT = BASELINE - TOP - 3;
 const MIN_HZ = 30, MAX_HZ = 20000;
 const SAMPLES = 2 * SIZE; // analyser resolution, half a unit
 const MODES = ['fixed', 'harmonic', 'interval', 'inharmonic'];
-const BANKS = { 0: 'classic', 1: 'exciter', 2: 'fold', 3: 'noise' };
+const BANKS = { 0: 'classic', 1: 'exciter', 2: 'fold', 3: 'noise', 4: 'external' };
 
 function glyph(c) {
   const code = c.charCodeAt(0);

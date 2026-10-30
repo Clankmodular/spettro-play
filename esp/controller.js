@@ -672,7 +672,7 @@ export class Controller {
     u16(25, this.clockTimeMs);
     f[27] = this.restartBits;
     f[28] = pr.delayReverse ? 1 : 0;
-    f[29] = 0xb0 | (pr.oscBank >= 0 && pr.oscBank <= 3 ? pr.oscBank : 0);
+    f[29] = 0xb0 | (pr.oscBank >= 0 && pr.oscBank <= 4 ? pr.oscBank : 0); // 4: web External
     f[30] = clamp(Math.trunc(cc(DEST.Master) * 127 / 255), -127, 127) & 255;
     f[32] = clamp(pr.spectralBands + cc(DEST.Bands), 0, 255);
     // Spread: legacy byte 33 plus the u16 extension (spectral_control.h).

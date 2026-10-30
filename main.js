@@ -48,7 +48,7 @@ async function start() {
     ctx.audioWorklet.addModule('engine-worklet.js'),
   ]);
   const node = new AudioWorkletNode(ctx, 'spectrum-engine', {
-    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module, engineRate: ENGINE_RATE, testTone: TEST === 'tone' },
+    numberOfInputs: 1, outputChannelCount: [2], processorOptions: { module, engineRate: ENGINE_RATE, testTone: TEST === 'tone' },
   });
   node.connect(ctx.destination);
   window.spettro.node = node;
@@ -57,13 +57,68 @@ async function start() {
   });
   node.port.onmessage = ({ data }) => { if (data.type === 'status') ui.status(data); };
   ui.attach(node.port, ctx);
+  audio = { ctx, node };
   overlay.remove();
   document.body.classList.add('running');
+  useInput(inputSelect.value).catch(() => { inputSelect.value = ''; });
 }
+let audio = null;
 overlay.addEventListener('click', () => start().catch((err) => {
   overlay.querySelector('p').textContent = `Impossibile avviare l'audio: ${err.message}`;
   console.error(err);
 }));
+
+// ---- Audio input (External bank of oscillator B) -------------------------
+
+// The chosen input feeds the worklet (summed to mono there); without
+// echo cancellation, noise suppression or gain control, which would colour
+// an instrument. Remembered in this browser and reopened at start.
+const INPUT_KEY = 'spettro.audioInput';
+const inputSelect = document.getElementById('audio-input');
+let inputStream = null, inputSource = null;
+async function listInputs() {
+  const devices = (await navigator.mediaDevices?.enumerateDevices?.().catch(() => [])) || [];
+  const inputs = devices.filter((d) => d.kind === 'audioinput');
+  const chosen = inputSelect.value;
+  // Before permission is given the browser hides names and ids.
+  inputSelect.replaceChildren(new Option('off', ''),
+    ...inputs.map((d, i) => new Option(d.label || `ingresso ${i + 1}`, d.deviceId || 'default')));
+  inputSelect.value = [...inputSelect.options].some((o) => o.value === chosen) ? chosen : '';
+}
+async function useInput(id) {
+  inputSource?.disconnect();
+  inputStream?.getTracks().forEach((t) => t.stop());
+  inputSource = inputStream = null;
+  if (!id || !audio) return;
+  inputStream = await navigator.mediaDevices.getUserMedia({ audio: {
+    deviceId: id === 'default' ? undefined : { exact: id },
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } } });
+  inputSource = audio.ctx.createMediaStreamSource(inputStream);
+  inputSource.connect(audio.node);
+  const deviceId = inputStream.getAudioTracks()[0]?.getSettings().deviceId;
+  await listInputs();
+  if (deviceId && [...inputSelect.options].some((o) => o.value === deviceId)) inputSelect.value = deviceId;
+}
+if (navigator.mediaDevices?.getUserMedia) {
+  let saved = '';
+  try { saved = localStorage.getItem(INPUT_KEY) || ''; } catch { /* storage unavailable */ }
+  listInputs().then(() => {
+    if (saved && ![...inputSelect.options].some((o) => o.value === saved)) inputSelect.add(new Option('ingresso scelto', saved));
+    inputSelect.value = saved;
+  });
+  navigator.mediaDevices.addEventListener?.('devicechange', listInputs);
+  inputSelect.addEventListener('change', () => {
+    inputSelect.blur();
+    try { localStorage.setItem(INPUT_KEY, inputSelect.value); } catch { /* not remembered */ }
+    useInput(inputSelect.value).catch((err) => {
+      console.warn('audio input:', err);
+      inputSelect.value = '';
+    });
+  });
+} else {
+  inputSelect.replaceChildren(new Option('non supportato', ''));
+  inputSelect.disabled = true;
+}
 
 // ---- Guide ----------------------------------------------------------------
 

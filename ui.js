@@ -15,7 +15,7 @@ const now = () => performance.now();
 const ADC_TUNE = 7, ADC_MASTER = 8;
 const LATENCY_KEY = 'spettro.latency';
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-const BANK_ORDER = [0, 2, 3, 1]; // Classic, Fold, Noise, Exciter (oscillator::Next)
+const BANK_ORDER = [0, 2, 3, 1, 4]; // Classic, Fold, Noise, Exciter, External (oscillator::Next)
 const LFO_WAVES = ['tri', 'ramp', 'saw', 'square', 'random']; // Daisy waves 1..5
 const SHAPES = ['flat', 'saw', 'inv saw', 'triangle', 'inv tri'];
 const CC_DESTS = [[DEST.None, 'none'], [DEST.OscWave, 'osc1 wave'], [DEST.SubWave, 'osc2 wave'], [DEST.Blend, 'blend'],
@@ -794,7 +794,7 @@ export class Ui {
     // Assign: red only while assigning, white when anything is assigned.
     p.light('lfoAssign', this.lfoLearn.learning ? (blink(300) ? LED.red : null) : anyLfo ? LED.white : null);
     p.light('mode', MODE_COLORS[pr.spectralMode]);
-    p.light('bank', { 0: LED.white, 1: LED.green, 2: LED.red, 3: LED.blue }[pr.oscBank]);
+    p.light('bank', { 0: LED.white, 1: LED.green, 2: LED.red, 3: LED.blue, 4: LED.orange }[pr.oscBank]);
     const delayMs = (reply[29] << 8) | reply[30];
     // Reverb bank: steady red. Delay bank: a flash per delay time.
     if (this.reverbBank) p.light('delay', LED.red, 0.8);

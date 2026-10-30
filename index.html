@@ -18,6 +18,7 @@
         <button id="keyboard-mode" type="button" aria-pressed="false" title="Tastiera del PC come pad (tasto ` per attivare)">keyboard mode</button>
         <label>midi <select id="midi-input"><option>…</option></select></label>
         <label>canale <select id="midi-channel"><option value="0">omni</option></select></label>
+        <label title="Ingresso audio per il banco external dell'osc B">audio in <select id="audio-input"><option value="">off</option></select></label>
         <button id="fullscreen" type="button" title="Schermo intero">schermo intero</button>
       </div>
     </header>
@@ -90,7 +91,11 @@
       <section>
         <h2>Oscillators</h2>
         <ul>
-          <li><b>B fader:</b> the main oscillator's wave. <b>bank</b> button: Classic, Fold, Noise or Exciter, each a different family of waves.</li>
+          <li><b>B fader:</b> the main oscillator's wave. <b>bank</b> button: Classic, Fold, Noise or Exciter, each a different family of waves,
+            then <b>External</b> (orange LED): the audio input in place of the oscillator, to play Spettro as an effect.
+            Choose the input under <b>audio in</b> in the top bar (stereo is summed to mono); the B fader sets its level
+            (half = as it comes in, top = +12 dB). Each note filters the input through its bands, then delay and reverb:
+            hold notes (❄ or a drone) to keep the effect open.</li>
           <li><b>A fader:</b> the sub oscillator's wave. <b>1/2/4</b>: sub divider (one, two or four octaves down); long press: sub detune.</li>
           <li><b>blend</b> mixes main and sub; <b>xmod</b> cross-modulates them.</li>
         </ul>
@@ -182,6 +187,7 @@
           <li>Choose the input and the channel in the top bar. Notes follow the pads' tuning; Hold and the arpeggiator work on MIDI notes too.</li>
           <li>Four CCs can be assigned to controls (System → midi). Program change selects presets: bank = 1 + the whole part of program ÷ 24, preset = program mod 24 + 1.</li>
           <li>iPad and iPhone browsers have no MIDI access.</li>
+          <li>The browser asks once for permission to use the audio input; the choice is remembered.</li>
         </ul>
       </section>
 

@@ -56,6 +56,15 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.engineRate = engineRate;
     this.stutter = { step: 0, sent: 0 };
     this.tapLights = this.lights.subarray(8, 16);
+    // Audio input for the External bank: summed to mono at the device rate,
+    // read at the engine rate (linear) into the engine's input block before
+    // each render. Primed with a block of silence, so the engine never reads
+    // past what has arrived.
+    this.inputBlock = new Float32Array(this.mem.buffer, e.spectrum_input(), this.blockFrames);
+    this.inStep = sampleRate / engineRate;
+    this.inBuf = new Float32Array(8192);
+    this.inCount = Math.ceil(this.blockFrames * this.inStep) + 2;
+    this.inPos = 0;
     // Load: time spent in process() against the audio time it produced,
     // over about a second (Date.now is coarse, the sum is not biased).
     this.load = { work: 0, frames: 0, peak: 0, last: { load: 0, peak: 0 } };
@@ -117,6 +126,7 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     c.droneMuted = S.step !== 0 && c.droneActive();
     const length = c.droneMuted ? Math.round(STUTTER[S.step][1] * c.clockTimeMs / 1000 * this.engineRate) : 0;
     if (length !== S.sent) { this.e.spectrum_set_stutter(length); S.sent = length; }
+    this.readInput(n);
     const ptr = this.e.spectrum_render();
     if (ptr !== this.outPtr) { this.outPtr = ptr; this.out = new Float32Array(this.mem.buffer, ptr, 2 * n); }
     const out = this.out;
@@ -142,10 +152,36 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     if (this.controller.attacks.length) { this.e.spectrum_lights(); this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights); }
   }
 
-  process(_inputs, outputs) {
+  // This quantum of the audio input, mono (silence when none is connected).
+  writeInput(channels, quantum) {
+    if (this.inCount + quantum > this.inBuf.length) { this.inCount = 0; this.inPos = 0; }
+    const buf = this.inBuf, at = this.inCount, [a, b] = channels;
+    if (!a) buf.fill(0, at, at + quantum);
+    else if (!b) buf.set(a, at);
+    else for (let i = 0; i < quantum; i++) buf[at + i] = 0.5 * (a[i] + b[i]);
+    this.inCount += quantum;
+  }
+
+  // The engine's next input block at the engine rate.
+  readInput(n) {
+    const buf = this.inBuf, dst = this.inputBlock;
+    let pos = this.inPos;
+    for (let i = 0; i < n; i++) {
+      const k = Math.floor(pos), x = pos - k;
+      dst[i] = k + 1 < this.inCount ? buf[k] + (buf[k + 1] - buf[k]) * x : 0;
+      pos += this.inStep;
+    }
+    const drop = Math.min(Math.floor(pos), this.inCount);
+    buf.copyWithin(0, drop, this.inCount);
+    this.inCount -= drop;
+    this.inPos = pos - drop;
+  }
+
+  process(inputs, outputs) {
     const t0 = Date.now();
     const [left, right] = outputs[0];
     const quantum = left.length;
+    this.writeInput(inputs[0] || [], quantum);
     if (this.testTone) {
       const inc = 2 * Math.PI * 440 / sampleRate;
       for (let i = 0; i < quantum; i++) { left[i] = 0.25 * Math.sin(this.tonePhase); this.tonePhase = (this.tonePhase + inc) % (2 * Math.PI); }
