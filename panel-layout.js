@@ -46,10 +46,7 @@ export const FADERS = [
   { id: 'fx',      from: [536.4, 210.3], to: [536.4, 147.3] },
   { id: 'drive',   from: [575.8, 168.7], to: [575.8, 105.7] },
   { id: 'volume',  from: [786.2, 186.4], to: [786.2, 123.4] },
-  // Web-only hold fader (pressure for PC keyboard and mouse) takes the
-  // original attack place; attack moves one column left and 10 pt down.
-  { id: 'attack',  from: [709.3, 322.9], to: [709.3, 259.9] },
-  { id: 'hold',    from: [747.7, 312.9], to: [747.7, 249.9] },
+  { id: 'attack',  from: [747.7, 312.9], to: [747.7, 249.9] },
   { id: 'release', from: [786.1, 312.9], to: [786.1, 249.9] },
   // Diagonal transpose fader beside the pads.
   { id: 'transpose', from: [291.9, 499.6], to: [323.2, 443.0] },

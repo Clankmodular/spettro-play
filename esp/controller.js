@@ -84,8 +84,6 @@ export class Controller {
   constructor() {
     this.pr = defaultPreset();
     this.frame = new Uint8Array(FRAME);
-    // Web-only: pressure of notes without pressure (PC keyboard, mouse).
-    this.fixedPressure = 180;
     this.analyserRequested = false;
     this.lfoOutput = 0;
     this.midiChannel = 0; // 0 = omni

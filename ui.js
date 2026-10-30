@@ -77,7 +77,6 @@ export class Ui {
     this.panel = panel;
     this.display = display;
     this.pr = defaultPreset();
-    this.fixedPressure = 180;
     this.reverbBank = false; // the three knobs by Δt: delay or reverb
     this.stutterStep = 0; // web drone stutter, 0..11 (STUTTER), kept between drones
     this.adc = { tune: 0.5, volume: 0.75 };
@@ -106,7 +105,7 @@ export class Ui {
     this.port = port;
     this.ctx = ctx;
     this.send('set', { values: { ...this.pr, lfoAssigned: this.pr.lfoAssigned } });
-    this.send('prop', { values: { fixedPressure: this.fixedPressure, analyserRequested: true, midiChannel: this.midiChannel } });
+    this.send('prop', { values: { analyserRequested: true, midiChannel: this.midiChannel } });
     this.sendAdc();
     this.call('setBpm', 110);
   }
@@ -126,7 +125,7 @@ export class Ui {
       shape: pr.spectralSpread / 255, shift: pr.spectralRotate / 65535, reso: pr.spectralWidth / 255,
       xmod: pr.crossMod / 255, blend: blendToPanel(pr.oscSubBlend) / 65535, oscA: pr.subWave / 255,
       oscB: pr.wave_shape / 65535, drive: pr.driveAmount / 255, fx: pr.fxMix,
-      volume: this.adc.volume, tune: this.adc.tune, touch: 0.5, hold: (this.fixedPressure - 1) / 254,
+      volume: this.adc.volume, tune: this.adc.tune, touch: 0.5,
       time: (r ? pr.reverbSize : pr.delayTime) / 255, spread: (r ? pr.reverbTilt : pr.delayShift) / 255,
       diffuse: (r ? pr.delayRegen : pr.delayFeedback) / 255,
       attack: pr.attack / 255, release: pr.release / 255,
@@ -176,10 +175,6 @@ export class Ui {
       case 'volume': this.adc.volume = v; return this.sendAdc();
       case 'tune': this.adc.tune = v; return this.sendAdc();
       case 'touch': this.touchSensitivity = v; return;
-      case 'hold':
-        this.fixedPressure = 1 + Math.round(v * 254);
-        for (const k of this.fixedKeys || []) this.call('keyPressure', k, this.fixedPressure);
-        return this.send('prop', { values: { fixedPressure: this.fixedPressure } });
       case 'transpose': {
         // Web drone: while Hold holds captured notes the fader picks the
         // stutter (beat repeat of the output) instead, in 12 zones from the
@@ -503,17 +498,14 @@ export class Ui {
     return clamp(1 + Math.round(Math.min(1, pressure * gain) * 254), 1, 255);
   }
 
-  // Keys held without real pressure (finger, mouse, PC keyboard) follow the
-  // hold fader while held, as a pressure change on the instrument.
+  // Keys without real pressure (finger, mouse, PC keyboard) play as a key
+  // pressed fully.
   pad(index, action, pressure, source = 'pad') {
-    const fixed = this.fixedKeys || (this.fixedKeys = new Set());
     if (action === 'on') {
       this.lastKey = index;
-      if (pressure == null) fixed.add(index); else fixed.delete(index);
-      const p = pressure == null ? this.fixedPressure : this.touchPressure(pressure);
-      this.call('keyOn', index, p);
+      this.call('keyOn', index, pressure == null ? 255 : this.touchPressure(pressure));
     } else if (action === 'pressure') this.call('keyPressure', index, this.touchPressure(pressure));
-    else { fixed.delete(index); this.call('keyOff', index); }
+    else this.call('keyOff', index);
   }
 
   // Touch bend from pad index towards target, pos 0..1; off with the
@@ -526,12 +518,11 @@ export class Ui {
   padSlide(index, target) {
     if (!this.bendAllowed()) return false;
     this.call('keySlide', index, target);
-    if (this.fixedKeys?.delete(index)) this.fixedKeys.add(target);
     this.lastKey = target;
     return true;
   }
 
-  releaseAllKeys() { this.fixedKeys?.clear(); for (let k = 0; k < KEYS; k++) this.call('keyOff', k); }
+  releaseAllKeys() { for (let k = 0; k < KEYS; k++) this.call('keyOff', k); }
 
   // MIDI clock at 24 ppqn: tempo from the tick intervals, phase realigned
   // on every beat and on Start; times out after twice the period.
@@ -670,7 +661,7 @@ export class Ui {
   // ---- Presets ----------------------------------------------------------
 
   snapshot() {
-    return { pr: { ...this.pr, lfoAssigned: Array.from(this.pr.lfoAssigned) }, fixedPressure: this.fixedPressure,
+    return { pr: { ...this.pr, lfoAssigned: Array.from(this.pr.lfoAssigned) },
       volume: this.adc.volume, tune: this.adc.tune, bpm: this.bpm || 110, customFreq: this.customFreq,
       loop: this.loopClip(), name: this.presetName || '' };
   }
@@ -685,8 +676,6 @@ export class Ui {
     this.pr = pr;
     this.send('set', { values: pr });
     if (trillo !== this.pr.trilloOn) { this.call('setTrillo', trillo); this.pr.trilloOn = trillo; }
-    this.fixedPressure = data.fixedPressure ?? this.fixedPressure;
-    this.send('prop', { values: { fixedPressure: this.fixedPressure } });
     this.adc.volume = data.volume ?? this.adc.volume;
     this.adc.tune = data.tune ?? this.adc.tune;
     this.sendAdc();
@@ -717,7 +706,7 @@ export class Ui {
   }
 
   factoryReset() {
-    this.applyPreset({ pr: defaultPreset(), fixedPressure: 180, volume: 0.75, tune: 0.5, bpm: 110 });
+    this.applyPreset({ pr: defaultPreset(), volume: 0.75, tune: 0.5, bpm: 110 });
   }
 
   exportPresets() {
