@@ -79,7 +79,7 @@ export class Ui {
     this.pr = defaultPreset();
     this.fixedPressure = 180;
     this.reverbBank = false; // the three knobs by Δt: delay or reverb
-    this.stutterStep = 0; // web drone stutter, -12..12
+    this.stutterStep = 0; // web drone stutter, -12..12, kept between drones
     this.adc = { tune: 0.5, volume: 0.75 };
     this.page = 'analyser';
     this.menus = { note: { row: 0, editing: false }, arp: { row: 0, editing: false }, envelope: { row: 0, editing: false },
@@ -740,10 +740,11 @@ export class Ui {
 
   status(data) {
     this.state = data;
-    // Drone start and end move the transpose fader: to the middle (no
-    // stutter), then back to the transpose; the worklet stops the stutter.
+    // Drone start and end move the transpose fader: to the stutter step,
+    // kept from the last drone (the worklet starts it at once), then back
+    // to the transpose; the worklet stops the stutter.
     const drone = this.drone();
-    if (drone !== !!this.wasDrone) { this.wasDrone = drone; this.stutterStep = 0; this.syncPanel(); }
+    if (drone !== !!this.wasDrone) { this.wasDrone = drone; this.syncPanel(); }
     // Fields the controller owns.
     this.pr.latchedNote = data.pr.latchedNote;
     this.pr.trilloOn = data.pr.trilloOn;

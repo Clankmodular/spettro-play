@@ -408,6 +408,10 @@ export class Controller {
   }
 
   // Web drone: notes captured by a held Hold (keyboard or MIDI).
+  capturedVoice(v) {
+    return v.gate && (v.owner === OWNER_KEYBOARD ? v.holdKey < KEYS : !!this.midiHeld.get(v.midiNote)?.captured);
+  }
+
   droneActive() {
     if (this.momentaryHold.size) return true;
     for (const h of this.midiHeld.values()) if (h.captured) return true;
@@ -645,7 +649,9 @@ export class Controller {
       }
       f[NOTE[i]] = v.note; f[CENTS[i]] = v.cents; f[GATE[i]] = v.gate ? 1 : 0;
       f[TRIGGER[i]] = this.gen[i];
-      f[PRESSURE[i]] = v.owner === OWNER_MIDI && !v.gate ? 0 : v.aft;
+      // Web drone stutter: the captured voices go silent (pressure drives the
+      // sustain level), still held, while the repeat plays; new notes sound.
+      f[PRESSURE[i]] = (v.owner === OWNER_MIDI && !v.gate) || (this.droneMuted && this.capturedVoice(v)) ? 0 : v.aft;
     }
     f[6] = clamp(pr.attack + this.lfo(DEST.Attack) + cc(DEST.Attack), 0, 255);
     f[7] = clamp(pr.release + this.lfo(DEST.Release) + cc(DEST.Release), 0, 255);

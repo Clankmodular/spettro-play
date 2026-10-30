@@ -51,7 +51,8 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.lights = new Float32Array(this.mem.buffer, e.spectrum_lights(), 16);
     // Web drone stutter (beat repeat of the output): the last 3 s of engine
     // output, frozen while a slice of it repeats. Step -12..12 from the
-    // transpose fader during a Hold capture; 0 is off.
+    // transpose fader during a Hold capture, 0 is off; it stays set, so each
+    // new capture stutters again at once with the last step.
     this.engineRate = engineRate;
     this.history = [new Float32Array(Math.round(engineRate * 3)), new Float32Array(Math.round(engineRate * 3))];
     this.historyPos = 0;
@@ -115,7 +116,10 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     const ptr = this.e.spectrum_render();
     if (ptr !== this.outPtr) { this.outPtr = ptr; this.out = new Float32Array(this.mem.buffer, ptr, 2 * n); }
     const out = this.out;
-    if (this.stutter.step || this.stutter.mix) this.stutterBlock(out, n);
+    // While it stutters, the captured voices are silenced in the frame and
+    // whatever else is played sounds over the repeat.
+    this.controller.droneMuted = this.stutter.step !== 0 && this.controller.droneActive();
+    if (this.controller.droneMuted || this.stutter.mix) this.stutterBlock(out, n);
     else {
       const [hl, hr] = this.history, cap = hl.length;
       for (let i = 0; i < n; i++) {
@@ -143,14 +147,15 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     if (this.controller.attacks.length) { this.e.spectrum_lights(); this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights); }
   }
 
-  // Beat repeat: the history stops at the start and its last slice (one
-  // division of the beat) loops, with the samples before the slice
-  // crossfaded in at the seam. 3 ms fades in and out; the stutter ends by
-  // itself when the Hold capture does.
+  // Beat repeat added to the live sound (the captured voices are silenced):
+  // the history stops at the start and its last slice (one division of the
+  // beat) loops, with the samples before the slice crossfaded in at the
+  // seam. 3 ms fades in and out; the stutter ends by itself when the Hold
+  // capture does, and the step is kept for the next.
   stutterBlock(out, n) {
     const S = this.stutter, c = this.controller, [hl, hr] = this.history, cap = hl.length;
-    if (!c.droneActive()) S.step = 0;
-    if (S.step && !S.on) { S.on = true; S.anchor = this.historyPos; S.pos = 0; }
+    const want = S.step !== 0 && c.droneActive();
+    if (want && !S.on) { S.on = true; S.anchor = this.historyPos; S.pos = 0; }
     const steps = Math.ceil(Math.abs(S.step) / 2) - 1; // 2 LED steps per division
     const beats = [2, 1, 0.5, 0.25, 0.125, 0.0625][Math.max(0, steps)] * (S.step < 0 ? 2 / 3 : 1);
     const fadeLen = Math.round(1 / S.fade);
@@ -159,7 +164,7 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     const at = (k) => (k % cap + cap) % cap;
     for (let i = 0; i < n; i++) {
       const l = out[2 * i], r = out[2 * i + 1];
-      S.mix = Math.min(1, Math.max(0, S.mix + (S.step ? S.fade : -S.fade)));
+      S.mix = Math.min(1, Math.max(0, S.mix + (want ? S.fade : -S.fade)));
       let sl = 0, sr = 0;
       if (S.mix > 0) {
         const start = S.anchor - len, k = at(start + S.pos);
@@ -171,11 +176,11 @@ class SpectrumProcessor extends AudioWorkletProcessor {
         }
         if (++S.pos >= len) S.pos = 0;
       }
-      this.fifoL[this.fifoCount + i] = l + (sl - l) * S.mix;
-      this.fifoR[this.fifoCount + i] = r + (sr - r) * S.mix;
+      this.fifoL[this.fifoCount + i] = l + sl * S.mix;
+      this.fifoR[this.fifoCount + i] = r + sr * S.mix;
       if (!S.on || S.mix === 0) { hl[this.historyPos] = l; hr[this.historyPos] = r; if (++this.historyPos === cap) this.historyPos = 0; }
     }
-    if (!S.step && S.mix === 0) S.on = false;
+    if (!want && S.mix === 0) S.on = false;
   }
 
   process(_inputs, outputs) {
