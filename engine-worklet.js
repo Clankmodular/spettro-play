@@ -49,6 +49,13 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     // spectrum_lights() computes the lights into a static buffer: call it each
     // time, read it through these views.
     this.lights = new Float32Array(this.mem.buffer, e.spectrum_lights(), 16);
+    // Web drone stutter (beat repeat of the output): the last 3 s of engine
+    // output, frozen while a slice of it repeats. Step -12..12 from the
+    // transpose fader during a Hold capture; 0 is off.
+    this.engineRate = engineRate;
+    this.history = [new Float32Array(Math.round(engineRate * 3)), new Float32Array(Math.round(engineRate * 3))];
+    this.historyPos = 0;
+    this.stutter = { step: 0, on: false, anchor: 0, pos: 0, mix: 0, fade: 1 / Math.round(engineRate * 0.003) };
     this.tapLights = this.lights.subarray(8, 16);
     // Load: time spent in process() against the audio time it produced,
     // over about a second (Date.now is coarse, the sum is not biased).
@@ -72,6 +79,7 @@ class SpectrumProcessor extends AudioWorkletProcessor {
         Object.assign(c, data.values);
         break;
       case 'call': c[data.method](...(data.args || [])); break;
+      case 'stutter': this.stutter.step = data.step; break;
       case 'midi': c.midi(data.bytes); break;
       case 'adc':
         for (const [channel, value] of data.values) {
@@ -107,9 +115,15 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     const ptr = this.e.spectrum_render();
     if (ptr !== this.outPtr) { this.outPtr = ptr; this.out = new Float32Array(this.mem.buffer, ptr, 2 * n); }
     const out = this.out;
-    for (let i = 0; i < n; i++) {
-      this.fifoL[this.fifoCount + i] = out[2 * i];
-      this.fifoR[this.fifoCount + i] = out[2 * i + 1];
+    if (this.stutter.step || this.stutter.mix) this.stutterBlock(out, n);
+    else {
+      const [hl, hr] = this.history, cap = hl.length;
+      for (let i = 0; i < n; i++) {
+        const l = out[2 * i], r = out[2 * i + 1];
+        this.fifoL[this.fifoCount + i] = l; this.fifoR[this.fifoCount + i] = r;
+        hl[this.historyPos] = l; hr[this.historyPos] = r;
+        if (++this.historyPos === cap) this.historyPos = 0;
+      }
     }
     this.fifoCount += n;
     this.sinceFrame += n;
@@ -127,6 +141,41 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     }
     // Hits are collected every block so short flashes are not missed.
     if (this.controller.attacks.length) { this.e.spectrum_lights(); this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights); }
+  }
+
+  // Beat repeat: the history stops at the start and its last slice (one
+  // division of the beat) loops, with the samples before the slice
+  // crossfaded in at the seam. 3 ms fades in and out; the stutter ends by
+  // itself when the Hold capture does.
+  stutterBlock(out, n) {
+    const S = this.stutter, c = this.controller, [hl, hr] = this.history, cap = hl.length;
+    if (!c.droneActive()) S.step = 0;
+    if (S.step && !S.on) { S.on = true; S.anchor = this.historyPos; S.pos = 0; }
+    const steps = Math.ceil(Math.abs(S.step) / 2) - 1; // 2 LED steps per division
+    const beats = [2, 1, 0.5, 0.25, 0.125, 0.0625][Math.max(0, steps)] * (S.step < 0 ? 2 / 3 : 1);
+    const fadeLen = Math.round(1 / S.fade);
+    const len = Math.max(2 * fadeLen, Math.min(cap - 2 * fadeLen, Math.round(beats * c.clockTimeMs / 1000 * this.engineRate)));
+    if (S.pos >= len) S.pos %= len;
+    const at = (k) => (k % cap + cap) % cap;
+    for (let i = 0; i < n; i++) {
+      const l = out[2 * i], r = out[2 * i + 1];
+      S.mix = Math.min(1, Math.max(0, S.mix + (S.step ? S.fade : -S.fade)));
+      let sl = 0, sr = 0;
+      if (S.mix > 0) {
+        const start = S.anchor - len, k = at(start + S.pos);
+        sl = hl[k]; sr = hr[k];
+        const into = S.pos - (len - fadeLen);
+        if (into >= 0) { // seam: blend towards the samples just before the slice
+          const w = (into + 1) / fadeLen, j = at(start - fadeLen + into);
+          sl += (hl[j] - sl) * w; sr += (hr[j] - sr) * w;
+        }
+        if (++S.pos >= len) S.pos = 0;
+      }
+      this.fifoL[this.fifoCount + i] = l + (sl - l) * S.mix;
+      this.fifoR[this.fifoCount + i] = r + (sr - r) * S.mix;
+      if (!S.on || S.mix === 0) { hl[this.historyPos] = l; hr[this.historyPos] = r; if (++this.historyPos === cap) this.historyPos = 0; }
+    }
+    if (!S.step && S.mix === 0) S.on = false;
   }
 
   process(_inputs, outputs) {

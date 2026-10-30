@@ -88,6 +88,23 @@ export const LFO_LEDS = [202.1, 216.2, 230.4, 244.5, 258.6].map((x) => ({ x, y: 
 // Sub divisor LEDs beside the 1 / 2 / 4 legend.
 export const SUB_LEDS = [335.2, 349.6, 364.0].map((y) => ({ x: 424.6, y }));
 
+// Web: 12 LEDs beside the transpose fader, from the 3D project (SPETTRO.dxf,
+// layer PISELLI), bottom one first on a 60° line. Each window is the convex
+// hull of four 1.0 mm circles (the inner outline; the 2.2 mm one is the
+// base and would overlap) 0.31 mm apart along the line, 1.80 mm across.
+const MM = 1 / 0.35278;
+export const TRANSPOSE_LEDS = Array.from({ length: 12 }, (_, i) => {
+  const x = 300.57 + i * 4.911, y = 530.32 - i * 8.667;
+  const u = [0.5, -0.866], v = [0.866, 0.5], a = 0.155 * MM, b = 0.9 * MM, r = 1.0 * MM;
+  // Corners in turn, the outward normal turning clockwise on screen.
+  const c = [[a, b], [-a, b], [-a, -b], [a, -b]].map(([p, q]) => [x + p * u[0] + q * v[0], y + p * u[1] + q * v[1]]);
+  const n = [v, [-u[0], -u[1]], [-v[0], -v[1]], u];
+  const pt = (k, m) => `${(c[k][0] + r * n[m][0]).toFixed(2)} ${(c[k][1] + r * n[m][1]).toFixed(2)}`;
+  let d = `M${pt(0, 3)}`;
+  for (let k = 0; k < 4; k++) d += `A${r.toFixed(2)} ${r.toFixed(2)} 0 0 1 ${pt(k, k)}L${pt((k + 1) % 4, k)}`;
+  return { x, y, d: d + 'Z' };
+});
+
 // Eight-segment band chains, pill shaped and following the printed arc.
 export const BAND_CHAIN = [
   [107.3, 255.7], [124.8, 246.0], [141.4, 234.8], [156.9, 222.2],

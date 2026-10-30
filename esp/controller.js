@@ -407,6 +407,13 @@ export class Controller {
     for (const h of this.midiHeld.values()) if (h.keyDown) h.captured = true;
   }
 
+  // Web drone: notes captured by a held Hold (keyboard or MIDI).
+  droneActive() {
+    if (this.momentaryHold.size) return true;
+    for (const h of this.midiHeld.values()) if (h.captured) return true;
+    return false;
+  }
+
   holdUp() {
     const long = this.timeMs - this.holdPressedAt >= 300;
     const captured = [...this.momentaryHold];

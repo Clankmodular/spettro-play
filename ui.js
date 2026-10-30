@@ -79,6 +79,7 @@ export class Ui {
     this.pr = defaultPreset();
     this.fixedPressure = 180;
     this.reverbBank = false; // the three knobs by Δt: delay or reverb
+    this.stutterStep = 0; // web drone stutter, -12..12
     this.adc = { tune: 0.5, volume: 0.75 };
     this.page = 'analyser';
     this.menus = { note: { row: 0, editing: false }, arp: { row: 0, editing: false }, envelope: { row: 0, editing: false },
@@ -128,7 +129,8 @@ export class Ui {
       volume: this.adc.volume, tune: this.adc.tune, touch: 0.5, hold: (this.fixedPressure - 1) / 254,
       time: (r ? pr.reverbSize : pr.delayTime) / 255, spread: (r ? pr.reverbTilt : pr.delayShift) / 255,
       diffuse: (r ? pr.delayRegen : pr.delayFeedback) / 255,
-      attack: pr.attack / 255, release: pr.release / 255, transpose: (pr.articulationDegreeTranspose + 12) / 24,
+      attack: pr.attack / 255, release: pr.release / 255,
+      transpose: ((this.drone() ? this.stutterStep : pr.articulationDegreeTranspose) + 12) / 24,
     };
   }
 
@@ -179,6 +181,18 @@ export class Ui {
         for (const k of this.fixedKeys || []) this.call('keyPressure', k, this.fixedPressure);
         return this.send('prop', { values: { fixedPressure: this.fixedPressure } });
       case 'transpose': {
+        // Web drone: while Hold holds captured notes the fader picks the
+        // stutter (beat repeat of the output) instead: 0 off, up straight
+        // divisions, down triplets, faster away from 0.
+        if (this.drone()) {
+          const step = Math.round(v * 24 - 12);
+          if (step === this.stutterStep) return;
+          this.stutterStep = step;
+          this.send('stutter', { step });
+          const d = ['1/2', '1/4', '1/8', '1/16', '1/32', '1/64'][Math.ceil(Math.abs(step) / 2) - 1];
+          this.display.show(step ? `stutter ${d}${step < 0 ? 'T' : ''}` : 'drone', 600);
+          return;
+        }
         // pitch_fader::Quantize with range 12 and its hysteresis margin.
         const scaled = v * 24 - 12, current = this.pr.articulationDegreeTranspose;
         if (Math.abs(scaled - current) > 0.5 + 36 / 255) {
@@ -718,8 +732,18 @@ export class Ui {
 
   // ---- Status, LEDs and display ----------------------------------------------
 
+  // Web drone: notes captured by a held Hold.
+  drone() {
+    const s = this.state?.status;
+    return !!s && (s.captured.length > 0 || s.midiCaptured);
+  }
+
   status(data) {
     this.state = data;
+    // Drone start and end move the transpose fader: to the middle (no
+    // stutter), then back to the transpose; the worklet stops the stutter.
+    const drone = this.drone();
+    if (drone !== !!this.wasDrone) { this.wasDrone = drone; this.stutterStep = 0; this.syncPanel(); }
     // Fields the controller owns.
     this.pr.latchedNote = data.pr.latchedNote;
     this.pr.trilloOn = data.pr.trilloOn;
@@ -788,6 +812,13 @@ export class Ui {
     // Envelope and arp LEDs blink while their menu is open.
     p.light('envelope', this.page === 'envelope' ? (blink(400) ? LED.yellow : null) : shaped ? LED.yellow : null);
     [1, 2, 4].forEach((d, i) => p.light(`sub${i}`, pr.subOctave === d ? LED.white : null));
+    // Transpose LEDs (12, bottom first): + yellow from the bottom, − red from
+    // the top; during a drone the stutter step in violet, the same way.
+    const droning = this.drone(), tr = droning ? this.stutterStep : pr.articulationDegreeTranspose;
+    for (let i = 0; i < 12; i++) {
+      const on = tr > 0 ? i < tr : tr < 0 && i >= 12 + tr;
+      p.light(`transpose${i}`, on ? (droning ? LED.violet : tr > 0 ? LED.yellow : LED.red) : null);
+    }
     p.light('preset', this.page === 'preset' || this.presetName ? (this.presetDirty && this.presetName ? LED.red : LED.turquoise) : null);
     // Clock: yellow flash on the beat, steady while the BPM page is open.
     p.light('clock', this.page === 'bpm' || status.clockPhase < 40 ? LED.yellow : null);
@@ -810,7 +841,9 @@ export class Ui {
       const assigned = d !== undefined && (pr.lfoAssigned[d >> 3] & (1 << (d & 7))) !== 0;
       const looped = this.loop.lanes.get(id)?.length > 0;
       const reverb = this.reverbBank && (id === 'time' || id === 'spread' || id === 'diffuse');
-      const color = id === 'amount' || id === 'speed' || assigned ? LED.white : looped ? LED.blue : reverb ? LED.red : null;
+      const drone = id === 'transpose' && this.drone();
+      const color = id === 'amount' || id === 'speed' || assigned ? LED.white : looped ? LED.blue : reverb ? LED.red
+        : drone ? LED.violet : null;
       p.indicate(id, clamp(pos[id] + (assigned ? lfo : 0), 0, 1), color);
     }
 

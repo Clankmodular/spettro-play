@@ -98,6 +98,7 @@ export class Panel {
     for (const b of [...L.BUTTONS, ...L.RING_BUTTONS]) if (b.led) led(b.id, b.led);
     L.LFO_LEDS.forEach((p, i) => led(`lfo${i}`, p));
     L.SUB_LEDS.forEach((p, i) => led(`sub${i}`, p));
+    L.TRANSPOSE_LEDS.forEach((p, i) => { this.leds[`transpose${i}`] = el('path', { d: p.d, class: 'led' }, this.ledLayer); });
   }
 
   // Controls with a value light (knob ring or fader bar).
