@@ -6,7 +6,7 @@
 // 96-frame block and its reply frame goes back to the controller and, about
 // 30 times per second, to the panel for LEDs and display.
 
-import { Controller, FRAME } from './esp/controller.js';
+import { Controller, FRAME, IMAGE } from './esp/controller.js';
 
 // The engine runs at engineRate (48 kHz); sampleRate, the device's rate,
 // may differ (44.1 kHz interfaces): then process() resamples. Frame and status timing count engine samples.
@@ -64,6 +64,8 @@ class SpectrumProcessor extends AudioWorkletProcessor {
       case 'set':
         Object.assign(c.pr, data.values);
         if ('selKeyboard' in data.values || 'keyboardLayout' in data.values) c.updateKeyboard();
+        // Web fx mix goes straight to the engine, not through the SPI frame.
+        if ('fxMix' in data.values) this.e.spectrum_set_fx_mix(c.pr.fxMix);
         break;
       case 'prop':
         if ('midiChannel' in data.values && data.values.midiChannel !== c.midiChannel) c.midiReset();
@@ -94,7 +96,7 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     const c = this.controller, pr = c.pr;
     const mod = (base, d) => Math.min(255, Math.max(0, base + c.lfo(d) + c.cc(d))) / 255;
     const ptr = this.e.spectrum_geometry(mod(pr.spectralBands, 37), mod(pr.spectralSpread, 39),
-      mod(pr.spectralWidth, 40), pr.spectralRotate / 65535, pr.spectralStereo / 65535, pr.spectralMode,
+      mod(pr.spectralWidth, 40), pr.spectralRotate / 65535, IMAGE / 65535, pr.spectralMode,
       c.displayNoteHz() * Math.pow(2, (this.tuneCents || 0) / 1200));
     return new Float32Array(this.mem.buffer, ptr, 33).slice();
   }

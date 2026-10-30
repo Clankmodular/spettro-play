@@ -21,14 +21,14 @@ const SHAPES = ['flat', 'saw', 'inv saw', 'triangle', 'inv tri'];
 const CC_DESTS = [[DEST.None, 'none'], [DEST.OscWave, 'osc1 wave'], [DEST.SubWave, 'osc2 wave'], [DEST.Blend, 'blend'],
   [DEST.Crossmod, 'Xmod'], [DEST.SubDetune, 'sub detune'], [DEST.SubDivider, 'osc2 div'], [DEST.Drive, 'drive'],
   [DEST.Attack, 'attack'], [DEST.Release, 'release'], [DEST.Trillo, 'trl speed'], [DEST.Bands, 'bands'],
-  [DEST.Spread, 'spread'], [DEST.Rotate, 'rotate'], [DEST.Width, 'width'], [DEST.Stereo, 'stereo'],
+  [DEST.Spread, 'spread'], [DEST.Rotate, 'rotate'], [DEST.Width, 'width'],
   [DEST.FilterMode, 'flt mode'], [DEST.DelayTime, 'fx time'], [DEST.Feedback, 'reverb'], [DEST.Dispersion, 'disp'],
-  [DEST.ReverbDecay, 'rev decay'], [DEST.ReverbBands, 'rev bands'], [DEST.DelayFeedback, 'fx feedback'],
+  [DEST.ReverbSize, 'rev size'], [DEST.ReverbTilt, 'rev tilt'], [DEST.DelayFeedback, 'fx feedback'],
   [DEST.Master, 'master'], [DEST.LfoSpeed, 'lfo speed'], [DEST.LfoAmount, 'lfo amount'], [DEST.LfoWave, 'lfo wave']];
 const LFO_LABEL = { [DEST.Attack]: 'attack', [DEST.Release]: 'release', [DEST.Drive]: 'drive', [DEST.Bands]: 'flt band',
   [DEST.Spread]: 'flt spread', [DEST.Rotate]: 'flt rotate', [DEST.Stereo]: 'flt stereo', [DEST.Width]: 'flt width',
-  [DEST.DelayTime]: 'fx time', [DEST.Feedback]: 'reverb', [DEST.Dispersion]: 'fx disp', [DEST.ReverbDecay]: 'rev decay',
-  [DEST.ReverbBands]: 'rev bands', [DEST.DelayFeedback]: 'fx feedback', [DEST.OscWave]: 'osc1 wave',
+  [DEST.DelayTime]: 'fx time', [DEST.Feedback]: 'reverb', [DEST.Dispersion]: 'fx disp', [DEST.ReverbSize]: 'rev size',
+  [DEST.ReverbTilt]: 'rev tilt', [DEST.DelayFeedback]: 'fx feedback', [DEST.OscWave]: 'osc1 wave',
   [DEST.SubWave]: 'osc2 wave', [DEST.Blend]: 'osc blend', [DEST.Crossmod]: 'osc Xmod', [DEST.Master]: 'master',
   [DEST.Octave]: 'octave', [DEST.Transpose]: 'transpose', [DEST.Tune]: 'tune' };
 const LED = { white: '#f1efe9', yellow: '#ffb321', turquoise: '#36d3dc', red: '#ff3a2f', blue: '#4d9dff',
@@ -124,25 +124,25 @@ export class Ui {
       amount: pr.lfoAmount / 255, speed: pr.lfoSpeed / 255, bands: pr.spectralBands / 255,
       shape: pr.spectralSpread / 255, shift: pr.spectralRotate / 65535, reso: pr.spectralWidth / 255,
       xmod: pr.crossMod / 255, blend: blendToPanel(pr.oscSubBlend) / 65535, oscA: pr.subWave / 255,
-      oscB: pr.wave_shape / 65535, drive: pr.driveAmount / 255, image: pr.spectralStereo / 65535,
+      oscB: pr.wave_shape / 65535, drive: pr.driveAmount / 255, fx: pr.fxMix,
       volume: this.adc.volume, tune: this.adc.tune, touch: 0.5, hold: (this.fixedPressure - 1) / 254,
-      time: (r ? pr.reverbDecay : pr.delayTime) / 255, spread: (r ? pr.reverbBands : pr.delayShift) / 255,
+      time: (r ? pr.reverbSize : pr.delayTime) / 255, spread: (r ? pr.reverbTilt : pr.delayShift) / 255,
       diffuse: (r ? pr.delayRegen : pr.delayFeedback) / 255,
       attack: pr.attack / 255, release: pr.release / 255, transpose: (pr.articulationDegreeTranspose + 12) / 24,
     };
   }
 
   syncPanel() {
-    this.panel.defaults = { ...this.positions(), shift: 0.5, blend: 0.5, image: 0, tune: 0.5, transpose: 0.5 };
+    this.panel.defaults = { ...this.positions(), shift: 0.5, blend: 0.5, fx: 0.5, tune: 0.5, transpose: 0.5 };
     for (const [id, v] of Object.entries(this.positions())) this.panel.set(id, v);
   }
 
   destinationFor(id) {
     const r = this.reverbBank;
     return { bands: DEST.Bands, shape: DEST.Spread, shift: DEST.Rotate, reso: DEST.Width, xmod: DEST.Crossmod,
-      blend: DEST.Blend, oscA: DEST.SubWave, oscB: DEST.OscWave, drive: DEST.Drive, image: DEST.Stereo,
+      blend: DEST.Blend, oscA: DEST.SubWave, oscB: DEST.OscWave, drive: DEST.Drive,
       volume: DEST.Master, attack: DEST.Attack, release: DEST.Release, transpose: DEST.Transpose, tune: DEST.Tune,
-      time: r ? DEST.ReverbDecay : DEST.DelayTime, spread: r ? DEST.ReverbBands : DEST.Dispersion,
+      time: r ? DEST.ReverbSize : DEST.DelayTime, spread: r ? DEST.ReverbTilt : DEST.Dispersion,
       diffuse: r ? DEST.Feedback : DEST.DelayFeedback }[id];
   }
 
@@ -165,9 +165,9 @@ export class Ui {
       case 'oscA': return this.set({ subWave: b(v) });
       case 'oscB': return this.set({ wave_shape: v * 65535 });
       case 'drive': return this.set({ driveAmount: b(v) });
-      case 'image': return this.set({ spectralStereo: v * 65535 });
-      case 'time': return this.set(r ? { reverbDecay: b(v) } : { delayTime: b(v) });
-      case 'spread': return this.set(r ? { reverbBands: b(v) } : { delayShift: b(v) });
+      case 'fx': return this.set({ fxMix: v });
+      case 'time': return this.set(r ? { reverbSize: b(v) } : { delayTime: b(v) });
+      case 'spread': return this.set(r ? { reverbTilt: b(v) } : { delayShift: b(v) });
       case 'diffuse': return this.set(r ? { delayRegen: b(v) } : { delayFeedback: b(v) });
       case 'attack': return this.set({ attack: b(v) });
       case 'release': return this.set({ release: b(v) });

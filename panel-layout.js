@@ -41,8 +41,10 @@ export const FADERS = [
   { id: 'oscA',    from: [443.7, 312.9], to: [443.7, 249.9] },
   { id: 'oscB',    from: [482.2, 312.9], to: [482.2, 249.9] },
   { id: 'blend',   from: [333.3, 349.7], to: [396.3, 349.7] },
-  { id: 'drive',   from: [536.4, 210.3], to: [536.4, 147.3] },
-  { id: 'image',   from: [575.8, 168.7], to: [575.8, 105.7] },
+  // Web: image is fixed; drive moved to its fader, fx mix (dry/effects) on
+  // the old drive fader.
+  { id: 'fx',      from: [536.4, 210.3], to: [536.4, 147.3] },
+  { id: 'drive',   from: [575.8, 168.7], to: [575.8, 105.7] },
   { id: 'volume',  from: [786.2, 186.4], to: [786.2, 123.4] },
   // Web-only hold fader (pressure for PC keyboard and mouse) takes the
   // original attack place; attack moves one column left and 10 pt down.
