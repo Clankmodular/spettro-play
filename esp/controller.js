@@ -20,7 +20,7 @@ const ENV_ACTIVE = 2;
 // Modulation destination IDs (shared/modulation_destinations.h).
 export const DEST = {
   Volume: 0, Pitch: 1, Blend: 2, OscWave: 4, SubWave: 5, Stereo: 6, Rotate: 8, DelayTime: 9,
-  None: 11, Trillo: 13, Drive: 21, FreezeDuration: 25, FreezeSelection: 26, FreezeProbability: 27,
+  None: 11, Trillo: 13, Drive: 21, ReverbDecay: 25, ReverbBands: 26, DelayFeedback: 27,
   LfoAmount: 30, LfoSpeed: 31, Attack: 34, Release: 35, Bands: 37, Spread: 39, Width: 40,
   Crossmod: 41, Feedback: 42, Dispersion: 43, Master: 45, SubDetune: 47, SubDivider: 48,
   FilterMode: 49, LfoWave: 50, Octave: 52, Transpose: 53, Tune: 54,
@@ -28,7 +28,7 @@ export const DEST = {
 const SUPPORTED = new Set([DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
   DEST.Stereo, DEST.Width, DEST.DelayTime, DEST.Feedback, DEST.Dispersion, DEST.OscWave, DEST.SubWave,
   DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Octave, DEST.Transpose, DEST.Tune,
-  DEST.FreezeDuration, DEST.FreezeSelection, DEST.FreezeProbability]);
+  DEST.ReverbDecay, DEST.ReverbBands, DEST.DelayFeedback]);
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -40,7 +40,9 @@ export function defaultPreset() {
     subWave: 0, crossMod: 0, subDetuneCents: 0, subOctave: 1,
     spectralRotate: 32767.5, spectralWidth: 63.75, spectralBands: 255, spectralSpread: 128,
     spectralMode: 0, delayTime: 0, delayRegen: 0, delayShift: 0, delayReverse: 0,
-    freezeDuration: 85, freezeSelection: 0, freezeProbability: 0, driveAmount: 0,
+    // Web: the freeze slots carry reverb decay, reverb bands and delay
+    // feedback (240 and up: hold), changed in the web build of the Daisy DSP.
+    reverbDecay: 128, reverbBands: 128, delayFeedback: 0, driveAmount: 0,
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
     ccAssignDest: [DEST.None, DEST.None, DEST.None, DEST.None], ccAssignAmount: [0, 0, 0, 0],
@@ -50,13 +52,23 @@ export function defaultPreset() {
   };
 }
 
+// Presets saved with the freeze: diffuse also set the reverb tail, so the
+// decay takes its value (below the hold zone); bands centred, no feedback.
+// LFO assignments of the freeze controls are dropped.
+export function migratePreset(pr) {
+  if (!('freezeDuration' in pr) && 'reverbDecay' in pr) return pr;
+  const { freezeDuration, freezeSelection, freezeProbability, ...rest } = pr;
+  const lfo = Array.from(pr.lfoAssigned || []);
+  if (lfo.length > 3) lfo[3] &= ~((1 << 1) | (1 << 2) | (1 << 3)); // DEST 25, 26, 27
+  return { ...rest, reverbDecay: Math.min(239, pr.delayRegen ?? 0), reverbBands: 128, delayFeedback: 0, lfoAssigned: lfo };
+}
+
 export class Controller {
   constructor() {
     this.pr = defaultPreset();
     this.frame = new Uint8Array(FRAME);
     // Web-only: pressure of notes without pressure (PC keyboard, mouse).
     this.fixedPressure = 180;
-    this.delayFreezeBank = false;
     this.analyserRequested = false;
     this.lfoOutput = 0;
     this.midiChannel = 0; // 0 = omni
@@ -648,10 +660,10 @@ export class Controller {
     f[57] = clamp(pr.lfoAmount + assign(DEST.LfoAmount), 0, 255);
     f[58] = clamp(pr.lfoWave + Math.round(assign(DEST.LfoWave) * 5 / 255), 0, 5);
     f[59] = clamp(pr.lfoSpeed + assign(DEST.LfoSpeed), 0, 255);
-    f[60] = clamp(pr.freezeDuration + cc(DEST.FreezeDuration), 0, 255);
+    f[60] = clamp(pr.reverbDecay + cc(DEST.ReverbDecay), 0, 255);
     f[61] = 255;
-    f[62] = clamp(pr.freezeSelection + cc(DEST.FreezeSelection), 0, 255);
-    f[63] = clamp(pr.freezeProbability + cc(DEST.FreezeProbability), 0, 255);
+    f[62] = clamp(pr.reverbBands + cc(DEST.ReverbBands), 0, 255);
+    f[63] = clamp(pr.delayFeedback + cc(DEST.DelayFeedback), 0, 255);
     f[64] = 0xf2;
     f[65] = (pr.bandAttackShape & 15) | ((pr.bandReleaseShape & 15) << 4);
     f[66] = ~pr.bandSustainMask & 255;

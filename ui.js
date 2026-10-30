@@ -3,7 +3,7 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, DEST } from './esp/controller.js';
+import { defaultPreset, migratePreset, DEST } from './esp/controller.js';
 import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js';
 import { PATTERNS, GROOVES, DIVISIONS, divisionIndex, speedForDivision } from './esp/trillo.js';
 import * as P from './pages.js';
@@ -23,12 +23,12 @@ const CC_DESTS = [[DEST.None, 'none'], [DEST.OscWave, 'osc1 wave'], [DEST.SubWav
   [DEST.Attack, 'attack'], [DEST.Release, 'release'], [DEST.Trillo, 'trl speed'], [DEST.Bands, 'bands'],
   [DEST.Spread, 'spread'], [DEST.Rotate, 'rotate'], [DEST.Width, 'width'], [DEST.Stereo, 'stereo'],
   [DEST.FilterMode, 'flt mode'], [DEST.DelayTime, 'fx time'], [DEST.Feedback, 'reverb'], [DEST.Dispersion, 'disp'],
-  [DEST.FreezeDuration, 'frz duration'], [DEST.FreezeSelection, 'frz select'], [DEST.FreezeProbability, 'frz prob'],
+  [DEST.ReverbDecay, 'rev decay'], [DEST.ReverbBands, 'rev bands'], [DEST.DelayFeedback, 'fx feedback'],
   [DEST.Master, 'master'], [DEST.LfoSpeed, 'lfo speed'], [DEST.LfoAmount, 'lfo amount'], [DEST.LfoWave, 'lfo wave']];
 const LFO_LABEL = { [DEST.Attack]: 'attack', [DEST.Release]: 'release', [DEST.Drive]: 'drive', [DEST.Bands]: 'flt band',
   [DEST.Spread]: 'flt spread', [DEST.Rotate]: 'flt rotate', [DEST.Stereo]: 'flt stereo', [DEST.Width]: 'flt width',
-  [DEST.DelayTime]: 'fx time', [DEST.Feedback]: 'reverb', [DEST.Dispersion]: 'fx disp', [DEST.FreezeDuration]: 'frz duration',
-  [DEST.FreezeSelection]: 'frz select', [DEST.FreezeProbability]: 'frz prob', [DEST.OscWave]: 'osc1 wave',
+  [DEST.DelayTime]: 'fx time', [DEST.Feedback]: 'reverb', [DEST.Dispersion]: 'fx disp', [DEST.ReverbDecay]: 'rev decay',
+  [DEST.ReverbBands]: 'rev bands', [DEST.DelayFeedback]: 'fx feedback', [DEST.OscWave]: 'osc1 wave',
   [DEST.SubWave]: 'osc2 wave', [DEST.Blend]: 'osc blend', [DEST.Crossmod]: 'osc Xmod', [DEST.Master]: 'master',
   [DEST.Octave]: 'octave', [DEST.Transpose]: 'transpose', [DEST.Tune]: 'tune' };
 const LED = { white: '#f1efe9', yellow: '#ffb321', turquoise: '#36d3dc', red: '#ff3a2f', blue: '#4d9dff',
@@ -78,7 +78,7 @@ export class Ui {
     this.display = display;
     this.pr = defaultPreset();
     this.fixedPressure = 180;
-    this.delayFreezeBank = false;
+    this.reverbBank = false; // the three knobs by Δt: delay or reverb
     this.adc = { tune: 0.5, volume: 0.75 };
     this.page = 'analyser';
     this.menus = { note: { row: 0, editing: false }, arp: { row: 0, editing: false }, envelope: { row: 0, editing: false },
@@ -119,15 +119,15 @@ export class Ui {
 
   // Panel position (0..1) of every continuous control from the current pr.
   positions() {
-    const pr = this.pr, f = this.delayFreezeBank;
+    const pr = this.pr, r = this.reverbBank;
     return {
       amount: pr.lfoAmount / 255, speed: pr.lfoSpeed / 255, bands: pr.spectralBands / 255,
       shape: pr.spectralSpread / 255, shift: pr.spectralRotate / 65535, reso: pr.spectralWidth / 255,
       xmod: pr.crossMod / 255, blend: blendToPanel(pr.oscSubBlend) / 65535, oscA: pr.subWave / 255,
       oscB: pr.wave_shape / 65535, drive: pr.driveAmount / 255, image: pr.spectralStereo / 65535,
       volume: this.adc.volume, tune: this.adc.tune, touch: 0.5, hold: (this.fixedPressure - 1) / 254,
-      time: (f ? pr.freezeDuration : pr.delayTime) / 255, spread: (f ? pr.freezeSelection : pr.delayShift) / 255,
-      diffuse: (f ? pr.freezeProbability : pr.delayRegen) / 255,
+      time: (r ? pr.reverbDecay : pr.delayTime) / 255, spread: (r ? pr.reverbBands : pr.delayShift) / 255,
+      diffuse: (r ? pr.delayRegen : pr.delayFeedback) / 255,
       attack: pr.attack / 255, release: pr.release / 255, transpose: (pr.articulationDegreeTranspose + 12) / 24,
     };
   }
@@ -138,12 +138,12 @@ export class Ui {
   }
 
   destinationFor(id) {
-    const f = this.delayFreezeBank;
+    const r = this.reverbBank;
     return { bands: DEST.Bands, shape: DEST.Spread, shift: DEST.Rotate, reso: DEST.Width, xmod: DEST.Crossmod,
       blend: DEST.Blend, oscA: DEST.SubWave, oscB: DEST.OscWave, drive: DEST.Drive, image: DEST.Stereo,
       volume: DEST.Master, attack: DEST.Attack, release: DEST.Release, transpose: DEST.Transpose, tune: DEST.Tune,
-      time: f ? DEST.FreezeDuration : DEST.DelayTime, spread: f ? DEST.FreezeSelection : DEST.Dispersion,
-      diffuse: f ? DEST.FreezeProbability : DEST.Feedback }[id];
+      time: r ? DEST.ReverbDecay : DEST.DelayTime, spread: r ? DEST.ReverbBands : DEST.Dispersion,
+      diffuse: r ? DEST.Feedback : DEST.DelayFeedback }[id];
   }
 
   control(id, v, fromLoop = false) {
@@ -152,7 +152,7 @@ export class Ui {
       if (this.lfoLearn.learning) { this.syncPanel(); return; }
       this.loopRecord(id, v);
     }
-    const b = (x) => Math.round(x * 255), f = this.delayFreezeBank;
+    const b = (x) => Math.round(x * 255), r = this.reverbBank;
     switch (id) {
       case 'amount': return this.set({ lfoAmount: b(v) });
       case 'speed': return this.set({ lfoSpeed: b(v) });
@@ -166,9 +166,9 @@ export class Ui {
       case 'oscB': return this.set({ wave_shape: v * 65535 });
       case 'drive': return this.set({ driveAmount: b(v) });
       case 'image': return this.set({ spectralStereo: v * 65535 });
-      case 'time': return this.set(f ? { freezeDuration: b(v) } : { delayTime: b(v) });
-      case 'spread': return this.set(f ? { freezeSelection: b(v) } : { delayShift: b(v) });
-      case 'diffuse': return this.set(f ? { freezeProbability: b(v) } : { delayRegen: b(v) });
+      case 'time': return this.set(r ? { reverbDecay: b(v) } : { delayTime: b(v) });
+      case 'spread': return this.set(r ? { reverbBands: b(v) } : { delayShift: b(v) });
+      case 'diffuse': return this.set(r ? { delayRegen: b(v) } : { delayFeedback: b(v) });
       case 'attack': return this.set({ attack: b(v) });
       case 'release': return this.set({ release: b(v) });
       case 'volume': this.adc.volume = v; return this.sendAdc();
@@ -266,7 +266,8 @@ export class Ui {
         if (b.consumed) return;
         return this.set({ subOctave: this.pr.subOctave === 1 ? 2 : this.pr.subOctave === 2 ? 4 : 1 });
       case 'delay':
-        // delay_freeze::BankButton: hold 1 s reverse, release before switches bank.
+        // delay_freeze::BankButton: hold 1 s reverse, release before switches
+        // between the delay and reverb knobs.
         if (down) {
           b.timer = setTimeout(() => {
             b.consumed = true;
@@ -277,7 +278,7 @@ export class Ui {
         }
         clearTimeout(b.timer);
         if (b.consumed) return;
-        this.delayFreezeBank = !this.delayFreezeBank;
+        this.reverbBank = !this.reverbBank;
         return this.syncPanel();
       case 'envelope':
         if (!down) return;
@@ -662,8 +663,9 @@ export class Ui {
   }
 
   applyPreset(data) {
-    const pr = { ...defaultPreset(), ...data.pr };
-    pr.lfoAssigned = Uint8Array.from(data.pr.lfoAssigned || []);
+    const saved = migratePreset(data.pr);
+    const pr = { ...defaultPreset(), ...saved };
+    pr.lfoAssigned = Uint8Array.from(saved.lfoAssigned || []);
     pr.latchedNote = this.pr.latchedNote;
     const trillo = pr.trilloOn;
     pr.trilloOn = this.pr.trilloOn;
@@ -754,8 +756,8 @@ export class Ui {
     }
     // Delay lines against the base time T, as the firmware display: shorter
     // turquoise, T white, longer orange (saturated at T/4 and 4T); brighter
-    // the longer the echo. Yellow when an echo arrives; red for Freeze
-    // (steady frozen, blinking pending).
+    // the longer the echo. Yellow when an echo arrives; red while the
+    // feedback holds (reported as frozen).
     const taps = this.state.taps || [], hits = this.state.delayHits || 0;
     const count = Math.ceil(amount - 1e-6);
     const sorted = taps.slice(0, count).filter((t) => t > 5).sort((a, b) => a - b);
@@ -779,8 +781,8 @@ export class Ui {
     p.light('mode', MODE_COLORS[pr.spectralMode]);
     p.light('bank', { 0: LED.white, 1: LED.green, 2: LED.red, 3: LED.blue }[pr.oscBank]);
     const delayMs = (reply[29] << 8) | reply[30];
-    // Freeze bank: steady red. Delay bank: a flash per delay time.
-    if (this.delayFreezeBank) p.light('delay', LED.red, 0.8);
+    // Reverb bank: steady red. Delay bank: a flash per delay time.
+    if (this.reverbBank) p.light('delay', LED.red, 0.8);
     else p.light('delay', delayMs > 0 && (t % Math.max(60, delayMs)) < 50 ? (pr.delayReverse ? LED.red : LED.turquoise) : null, 0.8);
     const shaped = pr.bandAttackShape || pr.bandReleaseShape || pr.bandSustainMask !== 0xff;
     // Envelope and arp LEDs blink while their menu is open.
@@ -801,14 +803,14 @@ export class Ui {
     // Rings and bars: yellow up to the value; LFO knobs white; a control
     // assigned to the LFO white, with the LFO offset added (lfo_assignment
     // Offset, reported in TX[34]); a control played by the loop blue; the
-    // freeze controls red in the Freeze bank.
+    // three knobs by Δt red in the reverb bank.
     const pos = this.positions(), lfo = status.lfoOutput / 255;
     for (const id of p.valueLights()) {
       const d = this.destinationFor(id);
       const assigned = d !== undefined && (pr.lfoAssigned[d >> 3] & (1 << (d & 7))) !== 0;
       const looped = this.loop.lanes.get(id)?.length > 0;
-      const frozen = this.delayFreezeBank && (id === 'time' || id === 'spread' || id === 'diffuse');
-      const color = id === 'amount' || id === 'speed' || assigned ? LED.white : looped ? LED.blue : frozen ? LED.red : null;
+      const reverb = this.reverbBank && (id === 'time' || id === 'spread' || id === 'diffuse');
+      const color = id === 'amount' || id === 'speed' || assigned ? LED.white : looped ? LED.blue : reverb ? LED.red : null;
       p.indicate(id, clamp(pos[id] + (assigned ? lfo : 0), 0, 1), color);
     }
 
