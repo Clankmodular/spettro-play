@@ -20,27 +20,18 @@ window.spettro = { ui, panel, display }; // for inspection from the console
 
 // ---- Audio ----------------------------------------------------------------
 
-const RATE = 48000;
-
+// The Daisy engine runs at 48 kHz, as the instrument.
+const ENGINE_RATE = 48000;
 const TEST = new URLSearchParams(location.search).get('test');
-// ?engine=freezemix: prototype engine where the freeze Probability control
-// is a Mix (built with build.ps1 -FreezeMix); from older firmware sources, so
-// it has no Exciter bank.
-const FREEZE_MIX = RATE === 48000 && new URLSearchParams(location.search).get('engine') === 'freezemix';
-// The freeze legend under "diffuse" reads "mix" on the prototype.
-if (FREEZE_MIX) panel.relabel([696, 196.6, 736, 206], 'mix', 716.25, 203.35);
 const overlay = document.getElementById('start');
-overlay.querySelector('small').textContent = FREEZE_MIX
-  ? 'prototipo: freeze probability → mix · niente Exciter'
-  : `audio a ${RATE / 1000} kHz · motore Daisy in WebAssembly`;
 async function start() {
   overlay.classList.add('starting');
-  const engine = await fetch(FREEZE_MIX ? 'spectrum_freezemix.wasm' : 'spectrum.wasm');
+  const engine = await fetch('spectrum.wasm');
   if (!engine.ok) throw new Error('motore audio non trovato');
-  // The 48 kHz engine runs at the device's own rate and the worklet
-  // resamples: forcing 48 kHz on an interface at 44.1 kHz makes Safari
-  // resample, which crackles on iPad.
-  const ctx = new AudioContext({ latencyHint: ui.latencyHint(), ...(RATE !== 48000 && { sampleRate: RATE }) });
+  // The context runs at the device's own rate and the worklet resamples:
+  // forcing 48 kHz on an interface at 44.1 kHz makes Safari resample, which
+  // crackles on iPad.
+  const ctx = new AudioContext({ latencyHint: ui.latencyHint() });
   // Audio checks for crackles: ?test=osc plays a browser sine (none of our
   // code on the audio thread), ?test=tone a sine from the worklet without
   // the engine. The panel stays silent in both.
@@ -57,7 +48,7 @@ async function start() {
     ctx.audioWorklet.addModule('engine-worklet.js'),
   ]);
   const node = new AudioWorkletNode(ctx, 'spectrum-engine', {
-    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module, engineRate: RATE, testTone: TEST === 'tone' },
+    numberOfInputs: 0, outputChannelCount: [2], processorOptions: { module, engineRate: ENGINE_RATE, testTone: TEST === 'tone' },
   });
   node.connect(ctx.destination);
   window.spettro.node = node;

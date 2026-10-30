@@ -8,9 +8,8 @@
 
 import { Controller, FRAME } from './esp/controller.js';
 
-// The engine runs at engineRate (48 kHz); sampleRate,
-// the device's rate, may differ (44.1 kHz interfaces): then process()
-// resamples. Frame and status timing count engine samples.
+// The engine runs at engineRate (48 kHz); sampleRate, the device's rate,
+// may differ (44.1 kHz interfaces): then process() resamples. Frame and status timing count engine samples.
 
 class SpectrumProcessor extends AudioWorkletProcessor {
   constructor(options) {
