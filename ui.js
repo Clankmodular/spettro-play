@@ -769,14 +769,16 @@ export class Ui {
 
     // Bands: steady yellow for the number of filters; while notes sound, the
     // filters take the filter-mode colour and follow their own envelopes.
-    const amount = 1 + (pr.spectralBands / 255) * 7;
+    // Assigned to the LFO: the count with the LFO offset added, white.
+    const bandsLfo = (pr.lfoAssigned[DEST.Bands >> 3] & (1 << (DEST.Bands & 7))) !== 0;
+    const amount = 1 + clamp(pr.spectralBands / 255 + (bandsLfo ? status.lfoOutput / 255 : 0), 0, 1) * 7;
     const levels = this.state.bandLevels || [];
     const sounding = levels.some((l) => l > 0.01);
     for (let i = 0; i < 8; i++) {
       const present = i === 0 ? 1 : clamp(amount - i, 0, 1);
       if (!present) p.light(`band${i}`, null);
       else if (sounding) p.light(`band${i}`, levels[i] > 0.01 ? MODE_COLORS[pr.spectralMode] : null, Math.min(1, levels[i]) * present);
-      else p.light(`band${i}`, LED.yellow, present);
+      else p.light(`band${i}`, bandsLfo ? LED.white : LED.yellow, present);
     }
     // Delay lines against the base time T, as the firmware display: shorter
     // turquoise, T white, longer orange (saturated at T/4 and 4T); brighter
