@@ -6,7 +6,7 @@
 // 96-frame block and its reply frame goes back to the controller and, about
 // 30 times per second, to the panel for LEDs and display.
 
-import { Controller, FRAME, IMAGE } from './esp/controller.js';
+import { Controller, FRAME, IMAGE, STUTTER } from './esp/controller.js';
 
 // The engine runs at engineRate (48 kHz); sampleRate, the device's rate,
 // may differ (44.1 kHz interfaces): then process() resamples. Frame and status timing count engine samples.
@@ -50,13 +50,15 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     // time, read it through these views.
     this.lights = new Float32Array(this.mem.buffer, e.spectrum_lights(), 16);
     // Web drone stutter (beat repeat of the output): the last 3 s of engine
-    // output, frozen while a slice of it repeats. Step -12..12 from the
-    // transpose fader during a Hold capture, 0 is off; it stays set, so each
-    // new capture stutters again at once with the last step.
+    // output, frozen while a slice of it repeats. Step 0..11 (STUTTER) from
+    // the transpose fader during a Hold capture, 0 is the plain drone; it
+    // stays set, so each new capture stutters again at once with the last step.
     this.engineRate = engineRate;
     this.history = [new Float32Array(Math.round(engineRate * 3)), new Float32Array(Math.round(engineRate * 3))];
     this.historyPos = 0;
-    this.stutter = { step: 0, on: false, anchor: 0, pos: 0, mix: 0, fade: 1 / Math.round(engineRate * 0.003) };
+    this.stutter = { step: 0, on: false, anchor: 0, pos: 0, len: 1, oldPos: 0, oldLen: 1, xfade: 0,
+      xLen: Math.round(engineRate * 0.005), mix: 0, fade: 1 / Math.round(engineRate * 0.003) };
+    this.sliceL = 0; this.sliceR = 0;
     this.tapLights = this.lights.subarray(8, 16);
     // Load: time spent in process() against the audio time it produced,
     // over about a second (Date.now is coarse, the sum is not biased).
@@ -155,26 +157,32 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   stutterBlock(out, n) {
     const S = this.stutter, c = this.controller, [hl, hr] = this.history, cap = hl.length;
     const want = S.step !== 0 && c.droneActive();
-    if (want && !S.on) { S.on = true; S.anchor = this.historyPos; S.pos = 0; }
-    const steps = Math.ceil(Math.abs(S.step) / 2) - 1; // 2 LED steps per division
-    const beats = [2, 1, 0.5, 0.25, 0.125, 0.0625][Math.max(0, steps)] * (S.step < 0 ? 2 / 3 : 1);
     const fadeLen = Math.round(1 / S.fade);
-    const len = Math.max(2 * fadeLen, Math.min(cap - 2 * fadeLen, Math.round(beats * c.clockTimeMs / 1000 * this.engineRate)));
-    if (S.pos >= len) S.pos %= len;
-    const at = (k) => (k % cap + cap) % cap;
+    // Back at the plain drone it fades out at the last length.
+    const len = S.step ? Math.max(2 * fadeLen, Math.min(cap - 2 * fadeLen,
+      Math.round(STUTTER[S.step][1] * c.clockTimeMs / 1000 * this.engineRate))) : S.len;
+    if (want && !S.on) { S.on = true; S.anchor = this.historyPos; S.pos = 0; S.len = len; S.xfade = 0; }
+    else if (len !== S.len) {
+      // A new length (step or tempo): the new loop starts from the beginning
+      // of its slice while the old one goes on underneath for 5 ms, so the
+      // read position never jumps. A change during a crossfade keeps the
+      // loop heard most as the old one.
+      if (S.xfade <= S.xLen / 2) { S.oldLen = S.len; S.oldPos = S.pos; }
+      S.len = len; S.pos = 0; S.xfade = S.xLen;
+    }
     for (let i = 0; i < n; i++) {
       const l = out[2 * i], r = out[2 * i + 1];
       S.mix = Math.min(1, Math.max(0, S.mix + (want ? S.fade : -S.fade)));
       let sl = 0, sr = 0;
       if (S.mix > 0) {
-        const start = S.anchor - len, k = at(start + S.pos);
-        sl = hl[k]; sr = hr[k];
-        const into = S.pos - (len - fadeLen);
-        if (into >= 0) { // seam: blend towards the samples just before the slice
-          const w = (into + 1) / fadeLen, j = at(start - fadeLen + into);
-          sl += (hl[j] - sl) * w; sr += (hr[j] - sr) * w;
+        this.slice(S.len, S.pos); sl = this.sliceL; sr = this.sliceR;
+        if (++S.pos >= S.len) S.pos = 0;
+        if (S.xfade > 0) {
+          this.slice(S.oldLen, S.oldPos);
+          const w = S.xfade-- / S.xLen;
+          sl += (this.sliceL - sl) * w; sr += (this.sliceR - sr) * w;
+          if (++S.oldPos >= S.oldLen) S.oldPos = 0;
         }
-        if (++S.pos >= len) S.pos = 0;
       }
       this.fifoL[this.fifoCount + i] = l + sl * S.mix;
       this.fifoR[this.fifoCount + i] = r + sr * S.mix;
@@ -182,6 +190,23 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     }
     if (!want && S.mix === 0) S.on = false;
   }
+
+  // One sample of the loop of length len ending at the stutter start, at pos,
+  // into sliceL / sliceR: near the end it blends towards the samples just
+  // before the slice, so the wrap is seamless.
+  slice(len, pos) {
+    const [hl, hr] = this.history, cap = hl.length, fadeLen = Math.round(1 / this.stutter.fade);
+    const at = (k) => (k % cap + cap) % cap;
+    const start = this.stutter.anchor - len, k = at(start + pos);
+    let sl = hl[k], sr = hr[k];
+    const into = pos - (len - fadeLen);
+    if (into >= 0) {
+      const w = (into + 1) / fadeLen, j = at(start - fadeLen + into);
+      sl += (hl[j] - sl) * w; sr += (hr[j] - sr) * w;
+    }
+    this.sliceL = sl; this.sliceR = sr;
+  }
+
 
   process(_inputs, outputs) {
     const t0 = Date.now();

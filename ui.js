@@ -3,7 +3,7 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST } from './esp/controller.js';
+import { defaultPreset, migratePreset, DEST, STUTTER } from './esp/controller.js';
 import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js';
 import { PATTERNS, GROOVES, DIVISIONS, divisionIndex, speedForDivision } from './esp/trillo.js';
 import * as P from './pages.js';
@@ -79,7 +79,7 @@ export class Ui {
     this.pr = defaultPreset();
     this.fixedPressure = 180;
     this.reverbBank = false; // the three knobs by Δt: delay or reverb
-    this.stutterStep = 0; // web drone stutter, -12..12, kept between drones
+    this.stutterStep = 0; // web drone stutter, 0..11 (STUTTER), kept between drones
     this.adc = { tune: 0.5, volume: 0.75 };
     this.page = 'analyser';
     this.menus = { note: { row: 0, editing: false }, arp: { row: 0, editing: false }, envelope: { row: 0, editing: false },
@@ -130,7 +130,7 @@ export class Ui {
       time: (r ? pr.reverbSize : pr.delayTime) / 255, spread: (r ? pr.reverbTilt : pr.delayShift) / 255,
       diffuse: (r ? pr.delayRegen : pr.delayFeedback) / 255,
       attack: pr.attack / 255, release: pr.release / 255,
-      transpose: ((this.drone() ? this.stutterStep : pr.articulationDegreeTranspose) + 12) / 24,
+      transpose: this.drone() ? (this.stutterStep + 0.5) / 12 : (pr.articulationDegreeTranspose + 12) / 24,
     };
   }
 
@@ -182,15 +182,14 @@ export class Ui {
         return this.send('prop', { values: { fixedPressure: this.fixedPressure } });
       case 'transpose': {
         // Web drone: while Hold holds captured notes the fader picks the
-        // stutter (beat repeat of the output) instead: 0 off, up straight
-        // divisions, down triplets, faster away from 0.
+        // stutter (beat repeat of the output) instead, in 12 zones from the
+        // bottom: the plain drone, then faster and faster repeats.
         if (this.drone()) {
-          const step = Math.round(v * 24 - 12);
+          const step = clamp(Math.floor(v * 12), 0, 11);
           if (step === this.stutterStep) return;
           this.stutterStep = step;
           this.send('stutter', { step });
-          const d = ['1/2', '1/4', '1/8', '1/16', '1/32', '1/64'][Math.ceil(Math.abs(step) / 2) - 1];
-          this.display.show(step ? `stutter ${d}${step < 0 ? 'T' : ''}` : 'drone', 600);
+          this.display.show(step ? `stutter ${STUTTER[step][0]}` : 'drone', 600);
           return;
         }
         // pitch_fader::Quantize with range 12 and its hysteresis margin.
@@ -814,10 +813,11 @@ export class Ui {
     p.light('envelope', this.page === 'envelope' ? (blink(400) ? LED.yellow : null) : shaped ? LED.yellow : null);
     [1, 2, 4].forEach((d, i) => p.light(`sub${i}`, pr.subOctave === d ? LED.white : null));
     // Transpose LEDs (12, bottom first): + yellow from the bottom, − red from
-    // the top; during a drone the stutter step in violet, the same way.
-    const droning = this.drone(), tr = droning ? this.stutterStep : pr.articulationDegreeTranspose;
+    // the top; during a drone violet from the bottom up to the stutter zone
+    // (one LED: the plain drone).
+    const droning = this.drone(), tr = pr.articulationDegreeTranspose;
     for (let i = 0; i < 12; i++) {
-      const on = tr > 0 ? i < tr : tr < 0 && i >= 12 + tr;
+      const on = droning ? i <= this.stutterStep : tr > 0 ? i < tr : tr < 0 && i >= 12 + tr;
       p.light(`transpose${i}`, on ? (droning ? LED.violet : tr > 0 ? LED.yellow : LED.red) : null);
     }
     p.light('preset', this.page === 'preset' || this.presetName ? (this.presetDirty && this.presetName ? LED.red : LED.turquoise) : null);

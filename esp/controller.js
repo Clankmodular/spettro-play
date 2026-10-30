@@ -28,6 +28,11 @@ export const DEST = {
 // Web: image (band stereo width) is fixed at half; its fader now carries
 // drive, so it is not modulated either.
 export const IMAGE = 32767.5;
+
+// Web drone stutter: the transpose fader in 12 zones from the bottom, the
+// first the plain drone, then repeats from slow to fast (length in beats).
+export const STUTTER = [['drone', 0], ['1/2', 2], ['1/4.', 1.5], ['1/4', 1], ['1/8.', 0.75], ['1/4T', 2 / 3],
+  ['1/8', 0.5], ['1/8T', 1 / 3], ['1/16', 0.25], ['1/16T', 1 / 6], ['1/32', 0.125], ['1/64', 0.0625]];
 const SUPPORTED = new Set([DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
   DEST.Width, DEST.DelayTime, DEST.Feedback, DEST.Dispersion, DEST.OscWave, DEST.SubWave,
   DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Octave, DEST.Transpose, DEST.Tune,
