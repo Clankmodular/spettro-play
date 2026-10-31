@@ -63,6 +63,37 @@ function rows(ctx, menu, items) {
   });
 }
 
+// Loop page (rec held): one recorded cycle, its values over its length as
+// a stepped line, the play position as a 2 px line, and its speed.
+export function drawLoopPage(ctx, m, act) {
+  header(ctx, m.name || 'loops', `${m.count}/24`, act.back);
+  const regions = [{ x: 0, y: 0, w: 240, h: 46, click: act.back }];
+  if (!m.lane) {
+    card(ctx, 12, 54, 216, 120, 'loops', m.count ? '' : 'none', 'idle', 3);
+    return regions;
+  }
+  const X = 12, Y = 54, W = 216, H = 120, len = m.lane.length, pts = m.lane.points;
+  ctx.fillStyle = COLOR.card;
+  ctx.fillRect(X, Y, W, H);
+  const px = (at) => X + 4 + Math.round((W - 8) * at / len);
+  const py = (v) => Y + 4 + Math.round((H - 8) * (1 - v));
+  ctx.fillStyle = COLOR.highlight;
+  for (let i = 0; i < pts.length; i++) {
+    const x0 = px(pts[i][0]), x1 = i + 1 < pts.length ? px(pts[i + 1][0]) : X + W - 4;
+    const y = py(pts[i][1]);
+    ctx.fillRect(x0, y - 1, Math.max(2, x1 - x0), 2);
+    if (i + 1 < pts.length) {
+      const y2 = py(pts[i + 1][1]);
+      ctx.fillRect(x1 - 1, Math.min(y, y2) - 1, 2, Math.abs(y2 - y) + 2);
+    }
+  }
+  ctx.fillStyle = COLOR.normal;
+  ctx.fillRect(px(m.pos), Y, 2, H);
+  card(ctx, 12, 180, 216, 54, 'speed', m.speed, m.speedFocus ? 'focus' : 'idle', 3, true);
+  regions.push({ x: 12, y: 180, w: 216, h: 54, select: () => {}, step: act.speed });
+  return regions;
+}
+
 export function drawListPage(ctx, title, menu, items, right, back) {
   header(ctx, title, right, back);
   const regions = rows(ctx, menu, items);

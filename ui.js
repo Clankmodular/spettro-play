@@ -34,6 +34,10 @@ const LFO_LABEL = { [DEST.Attack]: 'attack', [DEST.Release]: 'release', [DEST.Dr
 const LED = { white: '#f1efe9', yellow: '#ffb321', turquoise: '#36d3dc', red: '#ff3a2f', blue: '#4d9dff',
   green: '#47d86a', orange: '#ff8a1c', violet: '#c6a2ff' };
 const MODE_COLORS = [LED.blue, LED.yellow, LED.green, LED.red];
+// Loop page: 24 cycles (one per pad) and their speeds.
+const LOOP_LANES = 24;
+const LOOP_RATES = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
+const rateLabel = (r) => (r < 1 ? `/${Math.round(1 / r)}` : `X${r}`);
 // Linear mix of two #rrggbb colours, t = 0..1 towards b.
 function mixColor(a, b, t) {
   const c = (hex, i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
@@ -93,6 +97,7 @@ export class Ui {
     this.bpmFlash = 0;
     this.lfoLearn = { learning: false, startedAt: 0, touched: false };
     this.loop = { armed: false, lanes: new Map(), completed: new Set(), taps: [], movedSinceTap: false };
+    this.loopEdit = null; // rec held: the cycles on the pads (see loopEditPad)
     this.presets = new Presets();
     this.presetBank = 0; this.presetSlot = 0; // the page opens on the factory bank
     this.regions = [];
@@ -225,7 +230,7 @@ export class Ui {
     const held = t - (b.at || t);
     if (!down) b.down = false;
     // The envelope and arp menus close on any other button, which then acts as usual.
-    const owner = { envelope: 'envelope', arp: 'arp' }[this.page];
+    const owner = { envelope: 'envelope', arp: 'arp', loops: 'loop' }[this.page];
     if (owner && down && id !== owner) this.openPage('analyser');
     if (this.lfoLearn.learning && down && id.startsWith('oct')) { this.toggleLfo(DEST.Octave); this.lfoLearn.touched = true; b.consumed = true; return; }
 
@@ -249,7 +254,14 @@ export class Ui {
         if (b.consumed) return;
         if (this.page === 'arp') return this.openPage('analyser');
         return this.call('setTrillo', !this.pr.trilloOn), (this.pr.trilloOn = !this.pr.trilloOn);
-      case 'loop': return down && this.loopButton();
+      // Tap: arm / close / double tap clears (on release). Held 500 ms
+      // (web): the loop page, each cycle on a pad; a tap leaves it.
+      case 'loop':
+        if (down) { b.timer = setTimeout(() => { b.consumed = true; this.openLoopEdit(); }, 500); return; }
+        clearTimeout(b.timer);
+        if (b.consumed) return;
+        if (this.page === 'loops') return this.openPage('analyser');
+        return this.loopButton();
       case 'lfoAssign': return this.lfoButton(down);
       case 'lfoWave':
         if (!down) return;
@@ -323,6 +335,7 @@ export class Ui {
   }
 
   openPage(page) {
+    if (page !== 'loops') this.loopEdit = null;
     this.page = page;
     for (const m of Object.values(this.menus)) m.editing = false;
     if (page === 'preset') this.presetSnapshot = this.snapshot();
@@ -499,6 +512,11 @@ export class Ui {
   // Keys without real pressure (finger, mouse, PC keyboard) play as a key
   // pressed fully.
   pad(index, action, pressure, source = 'pad') {
+    if (this.loopEdit) {
+      if (action === 'off') this.call('keyOff', index); // a note held from before still ends
+      if (action !== 'pressure') this.loopEditPad(index, action === 'on');
+      return;
+    }
     if (action === 'on') {
       this.lastKey = index;
       this.call('keyOn', index, pressure == null ? 255 : this.touchPressure(pressure));
@@ -509,7 +527,7 @@ export class Ui {
   // Touch bend from pad index towards target, pos 0..1; off with the
   // arpeggio, as on the instrument. The instrument also turns it off in the
   // preset menu, where its keys pick slots; here the pads still play there.
-  bendAllowed() { return !this.pr.trilloOn; }
+  bendAllowed() { return !this.pr.trilloOn && !this.loopEdit; }
   padBend(index, target, pos) { if (this.bendAllowed()) this.call('keyBend', index, target, pos); }
   // The finger reached the neighbour: the note moves there. False when the
   // bend is off, so the panel keeps the note on its pad.
@@ -571,6 +589,8 @@ export class Ui {
 
   beatMs() { return 60000 / (this.bpm || 110); }
   loopMaxMs() { return 64 * this.beatMs(); }
+  // Play position of a cycle in its recorded time, at its speed.
+  lanePos(lane, t) { return ((t - lane.origin) * (lane.rate || 1)) % lane.length; }
 
   loopState() {
     const L = this.loop;
@@ -612,8 +632,10 @@ export class Ui {
     const lane = L.lanes.get(id);
     if (!L.armed) { L.lanes.delete(id); return; } // a hand movement deletes only this cycle
     if (L.completed.has(id)) return;
-    // The first movement of a control in this take replaces its old cycle.
-    if (!lane || lane.length) { L.lanes.set(id, { origin: t, length: 0, points: [[0, v]], idx: -1 }); return; }
+    // The first movement of a control in this take replaces its old cycle;
+    // 24 cycles at most, one per pad of the loop page.
+    if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add(id); return; }
+    if (!lane || lane.length) { L.lanes.set(id, { origin: t, length: 0, points: [[0, v]], idx: -1, rate: 1 }); return; }
     if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t); L.completed.add(id); return; }
     lane.points.push([t - lane.origin, v]);
   }
@@ -625,7 +647,7 @@ export class Ui {
         if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, lane.origin + this.loopMaxMs()); L.completed.add(id); }
         continue;
       }
-      const pos = (t - lane.origin) % lane.length;
+      const pos = this.lanePos(lane, t);
       let i = 0;
       while (i + 1 < lane.points.length && lane.points[i + 1][0] <= pos) i++;
       if (i === lane.idx) continue;
@@ -641,7 +663,8 @@ export class Ui {
     const t = now(), lanes = [];
     for (const [id, lane] of this.loop.lanes) {
       const length = lane.length || clamp(t - lane.origin, 1, this.loopMaxMs());
-      lanes.push([id, { length, phase: (t - lane.origin) % length, points: lane.points.filter(([at]) => at < length) }]);
+      lanes.push([id, { length, phase: lane.length ? this.lanePos(lane, t) : (t - lane.origin) % length,
+        points: lane.points.filter(([at]) => at < length), rate: lane.rate || 1 }]);
     }
     return lanes.length ? { version: 2, lanes } : null;
   }
@@ -652,8 +675,77 @@ export class Ui {
     for (const [id, lane] of clip?.lanes || []) {
       // Version 1 clips: one shared length, each lane a plain point list.
       const c = Array.isArray(lane) ? { length: clip.length, phase: 0, points: lane } : lane;
-      if (c.length > 0 && c.points?.length) L.lanes.set(id, { origin: t - c.phase, length: c.length, points: c.points, idx: -1 });
+      const rate = LOOP_RATES.includes(c.rate) ? c.rate : 1;
+      if (c.length > 0 && c.points?.length && L.lanes.size < LOOP_LANES) {
+        L.lanes.set(id, { origin: t - c.phase / rate, length: c.length, points: c.points, idx: -1, rate });
+      }
     }
+  }
+
+  // ---- Loop page (web): rec held 500 ms. Every LED goes dark but rec
+  // (blinking blue); the pads show the cycles in recording order, blue. A pad:
+  // its control blinks and the screen draws its cycle; held, the speed is
+  // in focus (/16 to X16, screen arrows or wheel; the encoder on the
+  // instrument); a double tap deletes it. A tap on rec or any other button
+  // leaves.
+
+  openLoopEdit() {
+    this.openPage('loops');
+    const lanes = [...this.loop.lanes.values()].filter((l) => l.length);
+    this.loopEdit = { sel: lanes.length ? 0 : -1, lastPad: -1, lastTap: 0, speedFocus: false, timer: 0 };
+  }
+
+  loopEditIds() { return [...this.loop.lanes.keys()]; }
+
+  loopEditPad(index, down) {
+    const e = this.loopEdit, ids = this.loopEditIds(), t = now();
+    if (!down) { clearTimeout(e.timer); e.speedFocus = false; return; }
+    if (index >= ids.length) return;
+    if (e.lastPad === index && t - e.lastTap < 320) {
+      const id = ids[index];
+      this.loop.lanes.delete(id);
+      this.syncPanel();
+      this.display.show(`${this.loopName(id)} cleared`, 900);
+      e.sel = Math.min(index, this.loop.lanes.size - 1);
+      e.lastPad = -1;
+      return;
+    }
+    e.sel = index; e.lastPad = index; e.lastTap = t;
+    clearTimeout(e.timer);
+    e.timer = setTimeout(() => { e.speedFocus = true; }, 400);
+  }
+
+  loopSpeed(step) {
+    const e = this.loopEdit, id = this.loopEditIds()[e?.sel];
+    const lane = id && this.loop.lanes.get(id);
+    if (!lane?.length) return;
+    const t = now(), pos = this.lanePos(lane, t);
+    const i = clamp(LOOP_RATES.indexOf(lane.rate || 1) + step, 0, LOOP_RATES.length - 1);
+    lane.rate = LOOP_RATES[i];
+    lane.origin = t - pos / lane.rate; // the position goes on from where it is
+  }
+
+  loopName(id) {
+    const r = this.reverbBank;
+    return { oscA: 'osc A', oscB: 'osc B', fx: 'fx mix', time: r ? 'size' : 'time', spread: r ? 'detail' : 'spread',
+      diffuse: r ? 'diffuse' : 'feedback' }[id] || id;
+  }
+
+  drawLoops(ctx) {
+    const e = this.loopEdit, ids = this.loopEditIds(), id = ids[e.sel], lane = id && this.loop.lanes.get(id);
+    const done = lane?.length > 0;
+    return P.drawLoopPage(ctx, {
+      name: id ? this.loopName(id) : '', count: ids.length, lane: done ? lane : null,
+      pos: done ? this.lanePos(lane, now()) : 0, speed: done ? rateLabel(lane.rate || 1) : '', speedFocus: e.speedFocus,
+    }, { back: () => this.openPage('analyser'), speed: (n) => this.loopSpeed(n) });
+  }
+
+  loopEditLeds() {
+    const p = this.panel, t = now(), e = this.loopEdit, ids = this.loopEditIds();
+    for (const id of Object.keys(p.leds)) p.light(id, id === 'loop' ? ((t % 400) < 200 ? LED.blue : null) : null);
+    const pos = this.positions(), sel = ids[e.sel];
+    for (const id of p.valueLights()) p.indicate(id, id === sel && (t % 400) < 200 ? pos[id] : 0, id === sel ? LED.blue : null);
+    for (let k = 0; k < KEYS; k++) p.padLight(k, k < ids.length ? LED.blue : null, k === e.sel ? 1 : 0.4);
   }
 
   // ---- Presets ----------------------------------------------------------
@@ -751,6 +843,7 @@ export class Ui {
   }
 
   leds() {
+    if (this.loopEdit) return this.loopEditLeds();
     const { status, reply } = this.state, pr = this.pr, p = this.panel, t = now();
     const blink = (ms) => (t % ms) < ms / 2;
 
@@ -880,6 +973,7 @@ export class Ui {
     } else if (page === 'preset') this.regions = this.drawPreset(ctx);
     else if (page === 'arp') this.regions = this.drawArp(ctx);
     else if (page === 'envelope') this.regions = this.drawEnvelope(ctx);
+    else if (page === 'loops') this.regions = this.drawLoops(ctx);
     else if (page === 'system') this.regions = this.drawSystem(ctx);
     else if (page === 'detune') {
       this.regions = P.drawDetunePage(ctx, pr.subDetuneCents,
