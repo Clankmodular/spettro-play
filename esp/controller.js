@@ -675,7 +675,8 @@ export class Controller {
 
   // ---- Web: the note cycle of the motion loop ------------------------------
   // Recorded on the panel while rec is armed (points [ms, key, pressure],
-  // pressure 0 = off), played here on the 5 ms tick through the keyboard
+  // pressure 0 = off; [ms, key, -1, target, pos] a bend, [ms, key, -2,
+  // target] a slide to the next pad), played here on the 5 ms tick through the keyboard
   // path, so Hold and the arpeggio work on it. phase: where it is now, in
   // recorded time; align: start from the top on the next beat (quantize).
 
@@ -704,11 +705,16 @@ export class Controller {
     if (this.timeMs < n.origin) return; // waiting for the beat
     const pos = ((this.timeMs - n.origin) * n.rate) % n.length;
     const fire = (from, to) => {
-      for (const [at, key, p] of n.points) {
+      for (const [at, key, p, target, bend] of n.points) {
         if (at <= from || at > to) continue;
         this.noteLooping = true;
-        if (p) { if (n.on.has(key)) this.keyOff(key); this.keyOn(key, p); n.on.add(key); }
-        else if (n.on.delete(key)) this.keyOff(key);
+        if (p > 0) { if (n.on.has(key)) this.keyOff(key); this.keyOn(key, p); n.on.add(key); }
+        else if (p === 0) { if (n.on.delete(key)) this.keyOff(key); }
+        else if (n.on.has(key) && p === -1) this.keyBend(key, target, bend);
+        else if (n.on.has(key) && p === -2 && !n.on.has(target)) {
+          this.keySlide(key, target);
+          n.on.delete(key); n.on.add(target);
+        }
         this.noteLooping = false;
       }
     };

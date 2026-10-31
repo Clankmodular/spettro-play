@@ -572,12 +572,17 @@ export class Ui {
   // arpeggio, as on the instrument. The instrument also turns it off in the
   // preset menu, where its keys pick slots; here the pads still play there.
   bendAllowed() { return !this.pr.trilloOn && !this.loopEdit; }
-  padBend(index, target, pos) { if (this.bendAllowed()) this.call('keyBend', index, target, pos); }
+  padBend(index, target, pos) {
+    if (!this.bendAllowed()) return;
+    this.call('keyBend', index, target, pos);
+    this.loopRecordNote(index, -1, target, pos);
+  }
   // The finger reached the neighbour: the note moves there. False when the
   // bend is off, so the panel keeps the note on its pad.
   padSlide(index, target) {
     if (!this.bendAllowed()) return false;
     this.call('keySlide', index, target);
+    this.loopRecordNote(index, -2, target);
     this.lastKey = target;
     return true;
   }
@@ -672,19 +677,24 @@ export class Ui {
     if (!lane.notes) return;
     // Notes still held at the end stop with the cycle.
     const held = new Set();
-    for (const [, key, p] of lane.points) if (p) held.add(key); else held.delete(key);
+    for (const [, key, p, target] of lane.points) {
+      if (p > 0) held.add(key);
+      else if (p === 0) held.delete(key);
+      else if (p === -2 && held.delete(key)) held.add(target);
+    }
     for (const key of held) lane.points.push([lane.length - 1, key, 0]);
     this.sendNoteLoop(lane);
   }
 
   // Web: notes played while rec is armed make one cycle of their own (id
   // 'notes'), from the first note to the closing press; a new take with notes
-  // replaces it. The worklet plays it (Controller.setNoteLoop).
-  loopRecordNote(key, pressure) {
+  // replaces it. Bends (pressure -1, target, pos) and slides (-2, target) go
+  // in it too. The worklet plays it (Controller.setNoteLoop).
+  loopRecordNote(key, pressure, target, pos) {
     const L = this.loop, t = now();
     if (!L.armed || L.completed.has('notes')) return;
     let lane = L.lanes.get('notes');
-    if (!lane && !pressure) return; // a release before the first note
+    if (!lane && !(pressure > 0)) return; // a release or bend before the first note
     L.movedSinceTap = true;
     if (!lane || lane.length) {
       if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('notes'); return; }
@@ -693,7 +703,7 @@ export class Ui {
       L.lanes.set('notes', lane);
     }
     if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t); L.completed.add('notes'); return; }
-    lane.points.push([t - lane.origin, key, pressure]);
+    lane.points.push(pressure < 0 ? [t - lane.origin, key, pressure, target, pos ?? 0] : [t - lane.origin, key, pressure]);
   }
 
   // The note cycle to the worklet: where it is now, or on the beat (align).
