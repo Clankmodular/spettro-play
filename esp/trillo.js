@@ -1,20 +1,31 @@
 // Port of shared/trillo_pattern.h and trillo_groove.h: arpeggio patterns,
-// groove templates and step divisions.
+// step divisions; the groove templates are the web's own.
 
 export const PATTERNS = ['up', 'down', 'up/down', 'played', 'reverse', 'random', 'shuffle', 'converge', 'thumb', 'pinky'];
 const UP = 0, DOWN = 1, UPDOWN = 2, PLAYED = 3, REVERSE = 4, RANDOM = 5, SHUFFLE = 6, CONVERGE = 7, THUMB = 8, PINKY = 9;
 
+// Web grooves (31 October, the user's choice: the firmware's genre names,
+// mostly swing and drum accents, did not suit the instrument). On Spettro the
+// pressure opens the bands and drives the sustain, so a groove moves the
+// timbre as well as the time. Level: pressure in % (null: as played); delay:
+// % of a step, after the grid. Always at full amount (no amount row).
 export const GROOVES = [
-  ['Straight', [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
-  ['Backbeat', [80, 45, 60, 50, 100, 50, 65, 55, 80, 45, 60, 50, 100, 55, 70, 60], [0, 6, 2, 8, 10, 6, 2, 8, 0, 6, 2, 8, 12, 6, 2, 10]],
-  ['Swing', [100, 50, 75, 50, 95, 50, 75, 55, 100, 50, 75, 50, 95, 50, 80, 60], [0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50]],
-  ['Funk', [100, 40, 65, 90, 55, 95, 40, 75, 90, 40, 70, 55, 100, 45, 80, 65], [0, 12, 3, 5, 8, 16, 2, 6, 0, 14, 4, 9, 6, 18, 2, 7]],
-  ['Hip Hop', [100, 35, 55, 75, 90, 40, 80, 45, 95, 50, 60, 85, 100, 35, 70, 55], [0, 40, 8, 30, 18, 42, 5, 35, 3, 38, 10, 32, 20, 44, 6, 36]],
-  ['Laid Back', [95, 60, 75, 55, 100, 60, 70, 65, 95, 55, 80, 60, 100, 65, 75, 70], [0, 12, 18, 8, 22, 14, 20, 10, 0, 14, 20, 10, 26, 16, 22, 12]],
-  ['Breakbeat', [100, 40, 65, 85, 95, 35, 80, 50, 90, 75, 40, 85, 100, 45, 70, 90], [0, 14, 2, 8, 8, 18, 3, 12, 0, 10, 5, 16, 10, 20, 2, 6]],
-  ['Reggae', [65, 40, 100, 45, 70, 40, 95, 50, 65, 40, 100, 45, 75, 45, 100, 55], [0, 10, 14, 8, 4, 12, 18, 10, 0, 10, 14, 8, 4, 12, 20, 10]],
-  ['Clave', [100, 40, 55, 95, 45, 60, 100, 40, 65, 50, 100, 45, 95, 40, 60, 50], [0, 5, 9, 2, 6, 10, 3, 7, 0, 8, 2, 6, 3, 9, 5, 10]],
-  ['Afro', [100, 50, 65, 90, 45, 75, 95, 50, 80, 55, 100, 45, 85, 60, 75, 90], [0, 18, 7, 3, 22, 10, 4, 20, 8, 2, 24, 12, 5, 18, 6, 3]],
+  ['straight', null, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  ['swing', [100, 50, 75, 50, 95, 50, 75, 55, 100, 50, 75, 50, 95, 50, 80, 60], [0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50]],
+  // Beats full, the steps between barely touched: the bands just open.
+  ['ghost', [100, 18, 22, 15, 95, 20, 15, 25, 100, 15, 22, 18, 90, 25, 15, 20], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  // The pressure climbs over the bar (the filter opens), falls, or both.
+  ['swell', [20, 25, 31, 36, 41, 47, 52, 57, 63, 68, 73, 79, 84, 89, 95, 100], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  ['fade', [100, 95, 89, 84, 79, 73, 68, 63, 57, 52, 47, 41, 36, 31, 25, 20], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  ['breath', [20, 23, 32, 45, 60, 75, 88, 97, 100, 97, 88, 75, 60, 45, 32, 23], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  // Seven accents spread evenly over 16 (Euclidean rhythm).
+  ['euclid', [100, 30, 100, 30, 100, 30, 100, 30, 30, 100, 30, 100, 30, 100, 30, 30], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  // An accent every 3 steps against the bar of 4, realigned every 16.
+  ['poly 3', [100, 40, 40, 100, 40, 40, 100, 40, 40, 100, 40, 40, 100, 40, 40, 100], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+  // In each group of 4 the notes close up and fade, like a bouncing ball.
+  ['rush', [100, 80, 65, 50, 100, 80, 65, 50, 100, 80, 65, 50, 100, 80, 65, 50], [0, 60, 70, 50, 0, 60, 70, 50, 0, 60, 70, 50, 0, 60, 70, 50]],
+  // Uneven delays and pressures, the same on every bar: loose, drunk.
+  ['drift', [90, 55, 75, 100, 45, 80, 60, 95, 70, 50, 100, 65, 85, 40, 75, 60], [0, 22, 8, 35, 12, 28, 4, 40, 18, 6, 30, 14, 38, 10, 25, 2]],
 ].map(([name, level, delay]) => ({ name, level, delay }));
 
 // Tempo row: (speed*7)>>8 selects steps per beat.
@@ -25,13 +36,12 @@ export const stepsPerBeat = (speed) => STEPS_PER_BEAT[divisionIndex(speed)];
 export const speedForDivision = (index) => Math.trunc((index * 256 + 128) / 7);
 
 export const PLAYED_PRESSURE = 256;
-export function groovePressure(groove, step, amount) {
-  if (!amount) return PLAYED_PRESSURE;
-  const level = GROOVES[groove % GROOVES.length].level[step & 15];
-  return Math.trunc((255 * (10000 - (100 - level) * amount) + 5000) / 10000);
+export function groovePressure(groove, step) {
+  const levels = GROOVES[groove % GROOVES.length].level;
+  return levels ? Math.trunc((255 * levels[step & 15] + 50) / 100) : PLAYED_PRESSURE;
 }
-export const grooveDelay = (groove, step, amount, period) =>
-  period * GROOVES[groove % GROOVES.length].delay[step & 15] * amount / 10000;
+export const grooveDelay = (groove, step, period) =>
+  period * GROOVES[groove % GROOVES.length].delay[step & 15] / 100;
 
 // Results are indices into the played stack (trillo::Sequence).
 export class Sequence {

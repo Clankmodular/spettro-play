@@ -191,7 +191,6 @@ export class Ui {
         const scaled = v * 24 - 12, current = this.pr.articulationDegreeTranspose;
         if (Math.abs(scaled - current) > 0.5 + 36 / 255) {
           this.set({ articulationDegreeTranspose: Math.round(scaled) });
-          this.display.show(`transpose ${Math.round(scaled) > 0 ? '+' : ''}${Math.round(scaled)}`, 600);
         }
         return;
       }
@@ -431,7 +430,6 @@ export class Ui {
       if (row === 1) this.set({ trilloPattern: (pr.trilloPattern + step + PATTERNS.length) % PATTERNS.length });
       if (row === 2) this.set({ trilloHoldPercent: clamp(pr.trilloHoldPercent + step, 1, 100) });
       if (row === 3) this.set({ trilloGroove: (pr.trilloGroove + step + GROOVES.length) % GROOVES.length });
-      if (row === 4) this.set({ trilloGrooveAmount: clamp(pr.trilloGrooveAmount + step, 0, 100) });
       return;
     }
     if (page === 'envelope') {
@@ -908,7 +906,7 @@ export class Ui {
     const used = Array.from({ length: SLOTS }, (_, i) => !!this.presets.get(this.presetBank, i));
     const data = this.presets.get(this.presetBank, this.presetSlot);
     return P.drawPresetPage(ctx, Object.assign(m, { bank: this.presetBank, slot: this.presetSlot, name: data?.name || '',
-      used, dirty: this.presetDirty, hint: 'pick a slot, then load or save' }), {
+      used, dirty: this.presetDirty }), {
       bank: (n) => { this.presetBank = clamp(this.presetBank + n, 0, 31); },
       slot: (n) => { this.presetSlot = clamp(this.presetSlot + n, 0, SLOTS - 1); },
       pick: (i) => { this.presetSlot = i; m.row = 1; },
@@ -925,7 +923,6 @@ export class Ui {
     return P.drawListPage(ctx, 'arpeggio', this.menus.arp, [
       ['tempo', DIVISIONS[divisionIndex(pr.trilloSpeed)], s(0)], ['pattern', PATTERNS[pr.trilloPattern], s(1)],
       ['hold', `${pr.trilloHoldPercent}%`, s(2)], ['groove', GROOVES[pr.trilloGroove].name, s(3)],
-      ['amount', `${pr.trilloGrooveAmount}%`, s(4)],
     ], pr.trilloOn ? 'on' : 'off');
   }
 

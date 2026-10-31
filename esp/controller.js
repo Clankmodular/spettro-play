@@ -59,7 +59,7 @@ export function defaultPreset() {
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
     ccAssignDest: [DEST.None, DEST.None, DEST.None, DEST.None], ccAssignAmount: [0, 0, 0, 0],
     trilloOn: false, bandAttackShape: 0, bandReleaseShape: 0, bandSustainMask: 0xff,
-    trilloSpeed: 128, trilloHoldPercent: 50, trilloGroove: 0, trilloGrooveAmount: 100, trilloPattern: 0,
+    trilloSpeed: 128, trilloHoldPercent: 50, trilloGroove: 0, trilloPattern: 0,
     latchedNote: false, articulationDegreeTranspose: 0, presetBpm: 120, oscBank: 0,
   };
 }
@@ -368,17 +368,17 @@ export class Controller {
     const period = this.clockTimeMs / stepsPerBeat(speed);
     if (this.arpNext === null) this.arpNext = this.timeMs;
     if (this.timeMs - this.arpNext > 2 * period) this.arpNext = this.timeMs;
-    const delay = grooveDelay(pr.trilloGroove, this.arpStep, pr.trilloGrooveAmount, period);
+    const delay = grooveDelay(pr.trilloGroove, this.arpStep, period);
     if (this.timeMs < this.arpNext + delay) return;
     this.stopArpNote();
     const index = this.sequence.next(pr.trilloPattern, this.keyStack, (k) => this.keyboardFreq[k]);
     if (index < this.keyStack.length) {
       const key = this.keyStack[index];
-      const pressure = groovePressure(pr.trilloGroove, this.arpStep, pr.trilloGrooveAmount);
+      const pressure = groovePressure(pr.trilloGroove, this.arpStep);
       this.noteOnKey(key, true, pressure === PLAYED_PRESSURE ? undefined : pressure);
       this.arpKey = key;
       // Gate length uses the interval to the next (groove-delayed) onset.
-      const nextDelay = grooveDelay(pr.trilloGroove, this.arpStep + 1, pr.trilloGrooveAmount, period);
+      const nextDelay = grooveDelay(pr.trilloGroove, this.arpStep + 1, period);
       this.arpGateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
     }
     this.arpStep++;
@@ -590,17 +590,17 @@ export class Controller {
     const speed = clamp(pr.trilloSpeed + this.cc(DEST.Trillo), 0, 255);
     const period = this.clockTimeMs / stepsPerBeat(speed);
     if (this.timeMs - a.next > 2 * period) a.next = this.timeMs;
-    const delay = grooveDelay(pr.trilloGroove, a.step, pr.trilloGrooveAmount, period);
+    const delay = grooveDelay(pr.trilloGroove, a.step, period);
     if (this.timeMs < a.next + delay) return;
     const used = held.slice(-12);
     const index = a.sequence.next(pr.trilloPattern, used.map(([note]) => note), (note) => 440 * Math.pow(2, (note - 69) / 12));
     if (index < used.length) {
       const [note, h] = used[index];
-      const pressure = groovePressure(pr.trilloGroove, a.step, pr.trilloGrooveAmount);
+      const pressure = groovePressure(pr.trilloGroove, a.step);
       this.midiSilence();
       this.midiVoiceOn(note, h.channel, pressure === PLAYED_PRESSURE ? h.pressure : pressure);
       a.playing = true;
-      const nextDelay = grooveDelay(pr.trilloGroove, a.step + 1, pr.trilloGrooveAmount, period);
+      const nextDelay = grooveDelay(pr.trilloGroove, a.step + 1, period);
       a.gateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
     }
     a.step++;

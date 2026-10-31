@@ -51,8 +51,11 @@ function card(ctx, x, y, w, h, label, value, state = 'idle', valueSize = 3, with
 // Rows of a list page. Item: [label, value, { step, click }]. Three tall
 // cards as on the instrument, or compact rows when the list is longer.
 function rows(ctx, menu, items) {
+  // Fill the page below the header (to 236), up to 54 high: 3 rows 54,
+  // 4 rows 43, 5 rows 33.
   const compact = items.length > 3;
-  const top = compact ? 52 : 54, h = compact ? 33 : 54, gap = compact ? 3 : 6;
+  const top = compact ? 52 : 54, gap = compact ? 3 : 6;
+  const h = Math.min(54, Math.floor((236 - top - (items.length - 1) * gap) / items.length));
   return items.map(([label, value, act = {}], i) => {
     const y = top + i * (h + gap);
     card(ctx, 12, y, 216, h, label, value, menu.row === i ? 'focus' : 'idle', 3, !!act.step);
@@ -136,7 +139,6 @@ export function drawPresetPage(ctx, m, act) {
     ctx.fillRect(x, y, 14, 9);
     regions.push({ x: x - 2, y: y - 2, w: 18, h: 13, click: () => act.pick(i) });
   }
-  drawText(ctx, m.hint, 120, 228, 1, COLOR.secondary, 'center');
   return regions;
 }
 
