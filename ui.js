@@ -39,6 +39,10 @@ const LOOP_LANES = 24;
 const LOOP_RATES = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
 const rateLabel = (r) => (r < 1 ? `/${Math.round(1 / r)}` : `X${r}`);
 const LOOP_BARS = [1, 2, 3, 4, 6, 8, 12, 16]; // quantize choices (4 beats a bar)
+// Arpeggio rules per pad: x of every y cycles (y up to 8), accumulator modes.
+const ARP_PLAYS = []; for (let y = 1; y <= 8; y++) for (let x = 1; x <= y; x++) ARP_PLAYS.push([x, y]);
+const ARP_MODES = ['clip', 'wrap', 'pendulum'];
+const ARP_RULE = { play: [1, 1], acc: 0, limit: 5, mode: 'clip' };
 // Linear mix of two #rrggbb colours, t = 0..1 towards b.
 function mixColor(a, b, t) {
   const c = (hex, i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
@@ -226,6 +230,9 @@ export class Ui {
     if (!l.drag || l.drag.id !== id) l.drag = { id, d, start: this.positions()[id], end: null, wheel: true };
     l.drag.end = v;
     if (l.drag.wheel) { clearTimeout(l.drag.timer); l.drag.timer = setTimeout(() => this.touchEnd(id), 700); }
+    // The knob just redrew its ring in yellow: back to the white range now,
+    // not at the next frame (it flickered).
+    this.panel.indicate(id, v, LED.white, l.drag.start);
     const depth = Math.round((v - l.drag.start) * 255);
     this.display.show(`LFO ${LFO_LABEL[d] || ''} ${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%`, 700);
   }
@@ -243,6 +250,7 @@ export class Ui {
     if (depth) mask[g.d >> 3] |= bit; else mask[g.d >> 3] &= ~bit;
     this.set({ lfoDepth: depths, lfoAssigned: mask });
     this.panel.set(id, g.start); // back to the start
+    if (this.state) this.leds();  // its light at once, not yellow until the next frame
     this.display.show(depth ? `LFO ${LFO_LABEL[g.d] || ''} ${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%` : `LFO ${LFO_LABEL[g.d] || ''}: off`, 1000);
   }
 
@@ -281,8 +289,8 @@ export class Ui {
     }
     // The envelope and arp menus close on any other button, which then acts as
     // usual; the octave buttons leave them open (web, asked by the user).
-    const owner = { envelope: 'envelope', arp: 'arp', loops: 'loop' }[this.page];
-    const keepsMenu = id.startsWith('oct') && (this.page === 'arp' || this.page === 'envelope');
+    const owner = { envelope: 'envelope', arp: 'arp', arpnote: 'arp', loops: 'loop' }[this.page];
+    const keepsMenu = id.startsWith('oct') && (this.page === 'arp' || this.page === 'arpnote' || this.page === 'envelope');
     if (owner && down && id !== owner && !keepsMenu) this.openPage('analyser');
     if (this.lfoLearn.learning && down && id.startsWith('oct')) { this.toggleLfo(DEST.Octave); this.lfoLearn.touched = true; b.consumed = true; return; }
 
@@ -304,7 +312,7 @@ export class Ui {
         if (down) { b.timer = setTimeout(() => { b.consumed = true; this.openPage(this.page === 'arp' ? 'analyser' : 'arp'); }, 300); return; }
         clearTimeout(b.timer);
         if (b.consumed) return;
-        if (this.page === 'arp') return this.openPage('analyser');
+        if (this.page === 'arp' || this.page === 'arpnote') return this.openPage('analyser');
         return this.call('setTrillo', !this.pr.trilloOn), (this.pr.trilloOn = !this.pr.trilloOn);
       // Tap: arm / close / double tap clears (on release). Held 500 ms
       // (web): the loop page, each cycle on a pad; a tap leaves it.
@@ -498,6 +506,18 @@ export class Ui {
       if (row === 3) this.set({ trilloGroove: (pr.trilloGroove + step + GROOVES.length) % GROOVES.length });
       return;
     }
+    if (page === 'arpnote') {
+      const key = this.arpNoteKey, rule = { ...ARP_RULE, ...(pr.arpRules?.[key] || {}) };
+      if (row === 0) rule.play = ARP_PLAYS[clamp(ARP_PLAYS.findIndex(([x, y]) => x === rule.play[0] && y === rule.play[1]) + step, 0, ARP_PLAYS.length - 1)];
+      if (row === 1) rule.acc = clamp(rule.acc + step, -12, 12);
+      if (row === 2) rule.limit = clamp(rule.limit + step, 1, 24);
+      if (row === 3) rule.mode = ARP_MODES[(ARP_MODES.indexOf(rule.mode) + step + 3) % 3];
+      const rules = { ...pr.arpRules };
+      // A rule back to the defaults is no rule.
+      if (rule.play[1] === 1 && !rule.acc) delete rules[key]; else rules[key] = rule;
+      this.set({ arpRules: rules });
+      return;
+    }
     if (page === 'envelope') {
       if (row === 0) this.set({ bandAttackShape: (pr.bandAttackShape + step + 5) % 5 });
       if (row === 1) this.set({ bandSustainMask: sustainMask(clamp(sustainChoice(pr.bandSustainMask) + step, 0, SUSTAIN_CHOICES - 2)) });
@@ -572,11 +592,17 @@ export class Ui {
     }
     if (action === 'on') {
       this.lastKey = index;
+      // Web: a pad of the latched arpeggio held 400 ms opens its rules.
+      const st = this.state?.status;
+      clearTimeout(this.arpNoteTimer);
+      if (this.pr.trilloOn && st?.latched && st.stack.includes(index)) {
+        this.arpNoteTimer = setTimeout(() => { this.arpNoteKey = index; this.openPage('arpnote'); }, 400);
+      }
       const p = pressure == null ? 255 : this.touchPressure(pressure);
       this.call('keyOn', index, p);
       this.loopRecordNote(index, p);
     } else if (action === 'pressure') this.call('keyPressure', index, this.touchPressure(pressure));
-    else { this.call('keyOff', index); this.loopRecordNote(index, 0); }
+    else { clearTimeout(this.arpNoteTimer); this.call('keyOff', index); this.loopRecordNote(index, 0); }
   }
 
   // Touch bend from pad index towards target, pos 0..1; off with the
@@ -1063,7 +1089,7 @@ export class Ui {
     const oct = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 };
     for (const [id, index] of Object.entries(oct)) p.light(id, pr.octaveIndex === index ? LED.yellow : null, Math.abs(index - 3) === 2 ? 1 : 0.7);
     p.light('hold', status.latched ? LED.red : status.captured.length || status.midiCaptured ? LED.violet : null);
-    p.light('arp', this.page === 'arp' ? (blink(400) ? LED.turquoise : null)
+    p.light('arp', this.page === 'arp' || this.page === 'arpnote' ? (blink(400) ? LED.turquoise : null)
       : status.trilloOn ? (status.arpPaused ? (blink(500) ? LED.turquoise : null) : LED.turquoise) : null);
     const L = this.loopState();
     p.light('loop', L === 'armed' ? (blink(400) ? LED.orange : null) : L === 'recording' ? LED.red : L === 'playing' ? LED.blue : null);
@@ -1129,6 +1155,7 @@ export class Ui {
         source: this.clockSource || 'int', flash: now() - this.bpmFlash < 150 }, (n) => this.setBpm((this.bpm || 110) + n));
     } else if (page === 'preset') this.regions = this.drawPreset(ctx);
     else if (page === 'arp') this.regions = this.drawArp(ctx);
+    else if (page === 'arpnote') this.regions = this.drawArpNote(ctx);
     else if (page === 'envelope') this.regions = this.drawEnvelope(ctx);
     else if (page === 'loops') this.regions = this.drawLoops(ctx);
     else if (page === 'system') this.regions = this.drawSystem(ctx);
@@ -1175,6 +1202,17 @@ export class Ui {
       ['tempo', DIVISIONS[divisionIndex(pr.trilloSpeed)], s(0)], ['pattern', PATTERNS[pr.trilloPattern], s(1)],
       ['hold', `${pr.trilloHoldPercent}%`, s(2)], ['groove', GROOVES[pr.trilloGroove].name, s(3)],
     ], pr.trilloOn ? 'on' : 'off');
+  }
+
+  // Rules of one pad of the arpeggio (pad held with the latched arpeggio).
+  drawArpNote(ctx) {
+    const pr = this.pr, key = this.arpNoteKey, s = (row) => this.stepper('arpnote', row);
+    const rule = { ...ARP_RULE, ...(pr.arpRules?.[key] || {}) };
+    const m = this.menus.arpnote || (this.menus.arpnote = { row: 0 });
+    return P.drawListPage(ctx, `pad ${key + 1}`, m, [
+      ['play', `${rule.play[0]}:${rule.play[1]}`, s(0)], ['acc', `${rule.acc > 0 ? '+' : ''}${rule.acc}`, s(1)],
+      ['limit', `${rule.limit}`, s(2)], ['mode', rule.mode, s(3)],
+    ], 'arp', () => this.openPage('analyser'));
   }
 
   drawEnvelope(ctx) {

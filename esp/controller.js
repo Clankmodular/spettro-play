@@ -60,6 +60,9 @@ export function defaultPreset() {
     // Web: depth of each destination (-255..255, control units from the
     // control's own value); the amount knob scales them all.
     lfoDepth: new Array(56).fill(0),
+    // Web: per-pad rules of the arpeggio (set on a held pad with the latched
+    // arpeggio): { [key]: { play: [x, y], acc, limit, mode } }, see arpRule.
+    arpRules: {},
     ccAssignDest: [DEST.None, DEST.None, DEST.None, DEST.None], ccAssignAmount: [0, 0, 0, 0],
     trilloOn: false, bandAttackShape: 0, bandReleaseShape: 0, bandSustainMask: 0xff,
     trilloSpeed: 128, trilloHoldPercent: 50, trilloGroove: 0, trilloPattern: 0,
@@ -144,6 +147,7 @@ export class Controller {
 
     // Arpeggio (Trillo).
     this.sequence = new Sequence();
+    this.arpRulesReset();
     this.arpKey = 255;
     this.arpNext = null;
     this.arpGateOff = 0;
@@ -194,10 +198,11 @@ export class Controller {
   renderVoice(i) {
     const v = this.v[i];
     if (v.owner !== OWNER_KEYBOARD || v.key >= KEYS) return;
-    let f = clamp(this.baseFrequency(v.key, v.degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
+    const degree = v.degree + (v.acc || 0);
+    let f = clamp(this.baseFrequency(v.key, degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
     if (v.bendTo < KEYS && v.bendPos > 0) {
       // Touch bend: geometric interpolation towards the neighbour pad.
-      const to = clamp(this.baseFrequency(v.bendTo, v.degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
+      const to = clamp(this.baseFrequency(v.bendTo, degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
       f *= Math.pow(to / f, v.bendPos);
     }
     const [note, cents] = Controller.toNote(f);
@@ -386,6 +391,7 @@ export class Controller {
     this.arpPaused = false;
     this.sequence.reset();
     this.arpStep = 0;
+    this.arpRulesReset();
     if (on) {
       // Held notes stop sounding directly and become the arpeggio.
       for (const v of this.v) if (v.owner === OWNER_KEYBOARD) v.gate = false;
@@ -408,7 +414,7 @@ export class Controller {
   arpeggio() {
     if (!this.pr.trilloOn) return;
     if (this.arpKey < KEYS && this.timeMs >= this.arpGateOff) this.stopArpNote();
-    if (!this.keyStack.length || this.arpPaused) { this.arpNext = null; this.sequence.reset(); this.arpStep = 0; return; }
+    if (!this.keyStack.length || this.arpPaused) { this.arpNext = null; this.sequence.reset(); this.arpStep = 0; this.arpRulesReset(); return; }
     const pr = this.pr;
     const speed = clamp(pr.trilloSpeed + this.cc(DEST.Trillo), 0, 255);
     const period = this.clockTimeMs / stepsPerBeat(speed);
@@ -418,24 +424,59 @@ export class Controller {
     if (this.timeMs < this.arpNext + delay) return;
     this.stopArpNote();
     const index = this.sequence.next(pr.trilloPattern, this.keyStack, (k) => this.keyboardFreq[k]);
-    if (index < this.keyStack.length) {
-      const key = this.keyStack[index];
+    const key = index < this.keyStack.length ? this.keyStack[index] : 255;
+    const rule = key < KEYS ? pr.arpRules?.[key] : null;
+    // A pad with a rule plays only on its cycles (x of every y) and moves by
+    // its accumulator each time it plays.
+    if (key < KEYS && (!rule || this.arpRulePlays(rule))) {
       const pressure = groovePressure(pr.trilloGroove, this.arpStep);
-      this.noteOnKey(key, true, pressure === PLAYED_PRESSURE ? undefined : pressure);
+      this.noteOnKey(key, true, pressure === PLAYED_PRESSURE ? undefined : pressure, rule ? this.arpAccumulate(key, rule) : 0);
       this.arpKey = key;
       // Gate length uses the interval to the next (groove-delayed) onset.
       const nextDelay = grooveDelay(pr.trilloGroove, this.arpStep + 1, period);
       this.arpGateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
     }
+    // A cycle: the pattern back at its first step (every step for one key).
+    if (this.sequence.position === 0 || this.keyStack.length === 1) this.arpCycle++;
     this.arpStep++;
     this.arpNext += period;
+  }
+
+  // ---- Web: arpeggio rules per pad (as the OXI One MKII's conditions and
+  // accumulator). play [x, y]: the pad sounds on cycle x of every y (a cycle
+  // is one pass of the pattern). acc: scale degrees added each time it
+  // plays, limit: how far, mode: clip (back to 0 past the limit), wrap (on
+  // around 0..limit, keeping the remainder), pendulum (back and forth).
+
+  arpRulesReset() { this.arpCycle = 0; this.arpAcc = new Map(); }
+
+  arpRulePlays(rule) {
+    const [x, y] = rule.play || [1, 1];
+    return y <= 1 || (this.arpCycle % y) === x - 1;
+  }
+
+  arpAccumulate(key, rule) {
+    const step = rule.acc | 0, limit = Math.max(1, rule.limit | 0);
+    if (!step) return 0;
+    const st = this.arpAcc.get(key) || { v: 0, dir: 1 };
+    const out = st.v, s = Math.abs(step), sign = Math.sign(step);
+    let a = Math.abs(st.v);
+    if (rule.mode === 'wrap') a = (a + s) % (limit + 1);
+    else if (rule.mode === 'pendulum') {
+      // Turns back where the next step would leave 0..limit.
+      if (a + st.dir * s > limit || a + st.dir * s < 0) st.dir = -st.dir;
+      a = clamp(a + st.dir * s, 0, limit);
+    } else { a += s; if (a > limit) a = 0; }
+    st.v = sign * a;
+    this.arpAcc.set(key, st);
+    return out;
   }
 
   restartKeyBands(key) {
     this.v.forEach((v, i) => { if (v.owner === OWNER_KEYBOARD && v.key === key && v.gate) this.restartBits ^= 1 << i; });
   }
 
-  noteOnKey(key, trigger, pressure) {
+  noteOnKey(key, trigger, pressure, acc = 0) {
     const i = this.allocKeyboardVoice(key);
     if (i < 0) return;
     const v = this.v[i];
@@ -449,6 +490,7 @@ export class Controller {
     v.bendTo = 255; v.bendPos = 0;
     v.aft = pressure ?? this.keyAftertouch[key];
     v.gate = true;
+    v.acc = acc; // web: arpeggio accumulator, scale degrees
     v.looped = !!this.noteLooping;
     if (trigger) v.trig = true;
     this.lastVoice = i;
@@ -502,6 +544,7 @@ export class Controller {
       this.arpPaused = !on;
       this.stopArpNote();
       this.sequence.reset(); this.arpStep = 0;
+      this.arpRulesReset();
       this.arpNext = on ? this.timeMs : null;
       if (!on) this.midiReleaseLatched();
       return;
