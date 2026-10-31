@@ -1168,7 +1168,7 @@ export class Ui {
       // Clear asks for a second click within a second.
       return P.drawListPage(ctx, 'sequencer', this.menus.arp, [mode,
         ['length', `${pr.seqLength} steps`, s(1)], ['step', SEQ_DIVISIONS[pr.seqDivision][0], s(2)],
-        ['direction', SEQ_DIRECTIONS[pr.seqDirection], s(3)], ['swing', `${pr.seqSwing}%`, s(4)],
+        ['play', SEQ_DIRECTIONS[pr.seqDirection], s(3)], ['swing', `${pr.seqSwing}%`, s(4)],
         ['rec', pr.seqOverdub ? 'add' : 'replace', s(5)],
       ], this.state?.status.seq.playing ? 'play' : 'stop');
     }
@@ -1196,7 +1196,8 @@ export class Ui {
       drag: (x) => { if (!m.swiped && Math.abs(x - m.pressX) > 30) { m.swiped = true; turn(); } },
       click: () => (m.pressX > 150 ? turn() : back()) };
     if (m.page === 1) {
-      return [...P.drawStepShape(ctx, { title, right, row: m.row, pressure: st.pressure, gate: st.gate, tie: st.tie }, {
+      const bend = st.keys.map((k) => st.bends?.[k]).find(Boolean); // the first note's recorded slide
+      return [...P.drawStepShape(ctx, { title, right, row: m.row, pressure: st.pressure, gate: st.gate, tie: st.tie, bend }, {
         back, select: (r) => { m.row = r; },
         pressure: (n, fine) => edit({ pressure: clamp(st.pressure + n * (fine ? 1 : 5), 1, 255) }),
         gate: (n) => edit({ gate: clamp(st.gate + n, 1, 100) }),

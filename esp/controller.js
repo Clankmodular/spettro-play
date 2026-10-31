@@ -309,6 +309,7 @@ export class Controller {
   keyBend(key, target, pos) {
     if (key < 0 || key >= KEYS || target < 0 || target >= KEYS || this.pr.trilloOn) return;
     pos = clamp(pos, 0, 1);
+    this.seq.bend(key, target, pos);
     this.v.forEach((v, i) => {
       if (v.owner !== OWNER_KEYBOARD || v.key !== key || !v.gate) return;
       v.bendTo = pos > 0 ? target : 255;
@@ -320,6 +321,7 @@ export class Controller {
   keySlide(key, target) {
     if (key < 0 || key >= KEYS || target < 0 || target >= KEYS || this.pr.trilloOn) return;
     if (!this.keyDown[key] || this.keyDown[target]) return;
+    this.seq.slide(key, target);
     this.keyDown[key] = 0;
     this.keyDown[target] = 1;
     this.keyAftertouch[target] = this.keyAftertouch[key];
@@ -427,17 +429,33 @@ export class Controller {
     return clamp(oct + this.pr.seqOctave - 3 + Math.round(this.lfo(DEST.Octave) * 6 / 255), 0, 6);
   }
 
+  // Each sequencer note is known by a tag (a slide moves it to another pad;
+  // a stolen voice no longer answers to it). 0: no voice.
   seqVoiceOn(key, pressure, oct) {
     const i = this.claimVoice(OWNER_SEQ);
-    if (i < 0) return;
-    Object.assign(this.v[i], { key, seqOct: oct, transpose: this.pr.scaleRoot, degree: this.currentDegreeTranspose(),
+    if (i < 0) return 0;
+    this.seqTag = (this.seqTag || 0) + 1;
+    Object.assign(this.v[i], { key, seqOct: oct, seqTag: this.seqTag, transpose: this.pr.scaleRoot, degree: this.currentDegreeTranspose(),
       octave: this.seqOctaveIndex(oct), bendTo: 255, bendPos: 0, aft: pressure, gate: true, trig: true });
     this.lastVoice = i;
     this.renderVoice(i);
+    return this.seqTag;
   }
 
-  seqVoiceOff(key) {
-    for (const v of this.v) if (v.owner === OWNER_SEQ && v.key === key) v.gate = false;
+  seqVoiceOff(tag) {
+    for (const v of this.v) if (v.owner === OWNER_SEQ && v.seqTag === tag) v.gate = false;
+  }
+
+  // A recorded slide: on pad from (moving there without a new attack, as
+  // keySlide), bent towards to by pos.
+  seqVoiceBend(tag, from, to, pos) {
+    const i = this.v.findIndex((v) => v.owner === OWNER_SEQ && v.seqTag === tag && v.gate);
+    if (i < 0) return;
+    const v = this.v[i];
+    if (v.key !== from) { v.key = from; this.restartBits ^= 1 << i; }
+    v.bendTo = to < KEYS && pos > 0 ? to : 255;
+    v.bendPos = v.bendTo < KEYS ? pos : 0;
+    this.renderVoice(i);
   }
 
   // ---- Hold (❄): tap latches, hold >= 300 ms captures momentarily -------

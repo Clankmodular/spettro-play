@@ -9,6 +9,15 @@ import { COLOR, drawText, textWidth } from './display.js';
 
 const ARROW_W = 22;
 
+// The ST7789 has no transparency: a solid colour a (0..1) of the way from
+// bg to fg, rounded to RGB565 as the firmware would draw it.
+function shade(fg, bg, a) {
+  const parse = (c) => c.match(/\d+/g).map(Number);
+  const [f, b] = [parse(fg), parse(bg)], v = f.map((x, i) => b[i] + (x - b[i]) * a);
+  const r = Math.round(v[0] * 31 / 255), g = Math.round(v[1] * 63 / 255), bl = Math.round(v[2] * 31 / 255);
+  return `rgb(${r * 255 / 31 | 0},${g * 255 / 63 | 0},${bl * 255 / 31 | 0})`;
+}
+
 function header(ctx, title, right, back, color = COLOR.normal) {
   const text = back ? `< ${title}` : title;
   let size = 3;
@@ -163,8 +172,23 @@ export function drawStepShape(ctx, m, act) {
     ctx.fillRect(X, floor - bh, Math.round(sweep - X), bh);
   }
   ctx.fillStyle = COLOR.normal;
-  ctx.fillRect(Math.round(sweep), Y, 1, H);
+  ctx.fillRect(Math.round(sweep), Y, 2, H);
   if (m.tie) drawText(ctx, '>', X + W - 14, Y + H / 2 - 5, 2, COLOR.normal);
+  // A recorded slide over the step (bottom no bend, top on the next pad); a
+  // tick where the note moves to the next pad. Past the step it is cut.
+  if (m.bend) {
+    ctx.fillStyle = COLOR.popup;
+    let px = null, py = null, pad = m.bend[0]?.[1];
+    for (const [t, from, , pos] of m.bend) {
+      if (t > 1) break;
+      const x = Math.round(X + t * W), y = Math.round(floor - pos * (floor - top));
+      if (px !== null) ctx.fillRect(px, py, Math.max(1, x - px), 2); // held until this point
+      if (from !== pad) { ctx.fillRect(x, top, 2, floor - top); pad = from; }
+      else if (px !== null) ctx.fillRect(x, Math.min(py, y), 2, Math.abs(y - py) + 2);
+      px = x; py = y;
+    }
+    if (px !== null) ctx.fillRect(px, py, Math.max(1, Math.round(X + W * (m.tie ? 1 : m.gate / 100)) - px), 2);
+  }
   const rows = [['pressure', String(m.pressure), act.pressure], ['gate', `${m.gate}%`, act.gate], ['tie', m.tie ? 'on' : 'off', act.tie]];
   const regions = rows.map(([label, value, step], i) => {
     const y = 146 + i * 31;
@@ -184,13 +208,14 @@ export function drawStepShape(ctx, m, act) {
 // step. While recording the title is red.
 export function drawSeqView(ctx, m, open) {
   header(ctx, m.title, m.right, null, m.rec ? COLOR.popup : COLOR.normal);
-  const X = 12, Y = 54, W = 216, H = 178, len = m.steps.length, cw = W / len;
+  // Whole-pixel columns (as on the 240 px screen), centred in the card.
+  const len = m.steps.length, cw = Math.floor(216 / len), W = cw * len, X = 120 - (W >> 1), Y = 54, H = 178;
   ctx.fillStyle = COLOR.card;
-  ctx.fillRect(X, Y, W, H);
-  if (m.current >= 0) { ctx.fillStyle = COLOR.cardFocus; ctx.fillRect(Math.round(X + m.current * cw), Y, Math.ceil(cw), H); }
+  ctx.fillRect(12, Y, 216, H);
+  if (m.current >= 0) { ctx.fillStyle = COLOR.cardFocus; ctx.fillRect(X + m.current * cw, Y, cw, H); }
   for (let i = 0; i <= len; i++) {
     ctx.fillStyle = i % 4 ? COLOR.track : COLOR.rail;
-    ctx.fillRect(Math.round(X + i * cw), Y, 1, H);
+    ctx.fillRect(X + i * cw, Y, 1, H);
   }
   // Pitch range of the pattern, with a margin; a single pitch sits in the middle.
   const pitches = m.steps.flatMap((s) => s.notes.map((n) => n.pitch));
@@ -199,14 +224,13 @@ export function drawSeqView(ctx, m, open) {
   m.steps.forEach((s, i) => {
     for (const n of s.notes) {
       const y = Y + H - (n.pitch - base) / span * H - nh / 2;
-      const w = s.tie ? cw + 1 : Math.max(2, cw * s.gate / 100 - 1);
-      ctx.globalAlpha = s.on ? 0.35 + 0.65 * s.pressure / 255 : 0.2;
-      ctx.fillStyle = i === m.current ? COLOR.normal : COLOR.highlight;
-      ctx.fillRect(Math.round(X + i * cw + 1), Math.round(y), Math.round(w), Math.round(nh));
+      const w = s.tie ? cw + 1 : Math.max(2, Math.round(cw * s.gate / 100) - 1);
+      const level = s.on ? 0.35 + 0.65 * s.pressure / 255 : 0.2;
+      ctx.fillStyle = shade(i === m.current ? COLOR.normal : COLOR.highlight, i === m.current ? COLOR.cardFocus : COLOR.card, level);
+      ctx.fillRect(X + i * cw + 1, Math.round(y), w, Math.round(nh));
     }
   });
-  ctx.globalAlpha = 1;
-  return m.steps.map((_, i) => ({ x: Math.round(X + i * cw), y: Y, w: Math.ceil(cw), h: H, click: () => open(i) }));
+  return m.steps.map((_, i) => ({ x: X + i * cw, y: Y, w: cw, h: H, click: () => open(i) }));
 }
 
 // Sub detune: +-100 cent slider, dragged or clicked.

@@ -6,7 +6,10 @@
 // Recording (rec in seq mode): with the sequence stopped, step by step (a pad or
 // chord writes a step and moves on, Hold a rest, a pad held + Hold a tie);
 // while it plays, live at once, quantized to the nearest step, adding to
-// or replacing the steps (seqOverdub).
+// or replacing the steps (seqOverdub). Live, the slides of each note are
+// kept too: bends: { key: [[t, from, to, pos], ...] } on its first step, t
+// in steps from the note's start, from the pad it is on, to the pad it
+// bends towards (255 none), pos 0..1, as the keyboard's touch bend.
 
 export const STEPS = 24;
 const MAX_KEYS = 5;
@@ -21,12 +24,27 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // sequence plays it moved by its own octave (pr.seqOctave), not the keyboard's.
 export const emptyStep = () => ({ keys: [], oct: 3, on: true, tie: false, pressure: 255, gate: 50 });
 
+// Slides of the keys still in a step (none: undefined).
+function cleanBends(bends, keys) {
+  if (!bends) return undefined;
+  const out = {};
+  for (const k of keys) {
+    const points = bends[k];
+    if (!Array.isArray(points) || !points.length) continue;
+    out[k] = points.filter((p) => p?.length === 4).slice(0, 4000).map(([t, from, to, pos]) =>
+      [Math.max(0, +t || 0), clamp(from | 0, 0, 23), to >= 0 && to < 24 ? to | 0 : 255, clamp(+pos || 0, 0, 1)]);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // Steps from a preset (or nothing): always 24, values in range.
 export function cleanSteps(list) {
   return Array.from({ length: STEPS }, (_, i) => {
     const s = list?.[i] || {};
-    return { keys: (s.keys || []).filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS), oct: clamp(Math.round(s.oct ?? 3), 0, 6), on: s.on !== false,
-      tie: !!s.tie, pressure: clamp(Math.round(s.pressure ?? 255), 1, 255), gate: clamp(Math.round(s.gate ?? 50), 1, 100) };
+    const keys = (s.keys || []).filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS);
+    return { keys, oct: clamp(Math.round(s.oct ?? 3), 0, 6), on: s.on !== false, tie: !!s.tie,
+      pressure: clamp(Math.round(s.pressure ?? 255), 1, 255), gate: clamp(Math.round(s.gate ?? 50), 1, 100),
+      bends: cleanBends(s.bends, keys) };
   });
 }
 
@@ -42,11 +60,11 @@ export class Sequencer {
     this.count = 0;         // steps played since step 1, for swing and the pattern phase
     this.rng = 0x9e3779b9;  // random direction
     this.gridAt = 0;        // its time on the grid (before swing)
-    this.sounding = [];     // { key, offAt, tie }
+    this.sounding = [];     // { key, tag (its voice), offAt, tie, at, bend, idx }
     this.rec = 'off';       // 'off', 'step' or 'live'
     this.recPos = 0;        // step record: the step being written
     this.chord = null;      // step record: keys held for this step
-    this.held = new Map();  // live record: key -> { step, at }
+    this.held = new Map();  // live record: key -> { step, at, cur (pad it is on now), points }
     this.replaced = new Set(); // live replace: steps already cleared in this pass
     this.skip = new Map();  // step -> keys just played live, not repeated in this pass
     this.captured = false;  // Hold held over it (keyboard view): a drone of its notes
@@ -114,7 +132,7 @@ export class Sequencer {
   }
 
   release() {
-    for (const n of this.sounding) this.c.seqVoiceOff(n.key);
+    for (const n of this.sounding) this.c.seqVoiceOff(n.tag);
     this.sounding = [];
   }
 
@@ -137,10 +155,22 @@ export class Sequencer {
     }
     // Captured by Hold: the notes sounding stay (a drone, the stutter repeats
     // it) and the steps go on silently, so it comes back in time.
-    if (!this.captured) for (const n of this.sounding) if (!n.tie && now >= n.offAt) { c.seqVoiceOff(n.key); n.off = true; }
+    if (!this.captured) for (const n of this.sounding) if (!n.tie && now >= n.offAt) { c.seqVoiceOff(n.tag); n.off = true; }
     if (this.sounding.some((n) => n.off)) this.sounding = this.sounding.filter((n) => !n.off);
+    const ms = this.stepMs();
+    // Recorded slides, on the step's time (so they follow the tempo).
+    if (!this.captured) for (const n of this.sounding) {
+      if (!n.bend) continue;
+      const t = (now - n.at) / ms;
+      let i = n.idx;
+      while (i + 1 < n.bend.length && n.bend[i + 1][0] <= t) i++;
+      if (i === n.idx) continue;
+      n.idx = i;
+      const [, from, to, pos] = n.bend[i];
+      c.seqVoiceBend(n.tag, from, to, pos);
+    }
     if (!this.playing) return;
-    const ms = this.stepMs(), len = this.length();
+    const len = this.length();
     this.pos %= len;
     if (now - this.gridAt > 2 * ms + 50) this.gridAt = now; // fell behind (tempo jump)
     while (now >= this.gridAt + this.swing(this.count)) {
@@ -162,7 +192,7 @@ export class Sequencer {
     const carried = [];
     for (const n of this.sounding) {
       if (n.tie && keys.includes(n.key)) carried.push(n);
-      else c.seqVoiceOff(n.key);
+      else c.seqVoiceOff(n.tag);
     }
     this.sounding = [];
     const offAt = c.timeMs + ms * s.gate / 100;
@@ -170,8 +200,8 @@ export class Sequencer {
       const n = carried.find((x) => x.key === key);
       if (n) { n.tie = s.tie; n.offAt = offAt; this.sounding.push(n); continue; }
       if (skip?.has(key)) continue;
-      c.seqVoiceOn(key, s.pressure, s.oct);
-      this.sounding.push({ key, tie: s.tie, offAt });
+      const tag = c.seqVoiceOn(key, s.pressure, s.oct);
+      this.sounding.push({ key, tag, tie: s.tie, offAt, at: c.timeMs, bend: s.bends?.[key], idx: -1 });
     }
   }
 
@@ -212,7 +242,7 @@ export class Sequencer {
       const step = next ? this.pos : this.last;
       if (next) (this.skip.get(step) || this.skip.set(step, new Set()).get(step)).add(key);
       this.write(step, key, pressure, !c.pr.seqOverdub);
-      this.held.set(key, { step, at: c.timeMs });
+      this.held.set(key, { step, at: c.timeMs, cur: key, points: [] });
     } else if (this.rec === 'step') {
       if (!this.chord) {
         this.chord = new Set();
@@ -225,14 +255,38 @@ export class Sequencer {
 
   keyOff(key) {
     if (this.rec === 'live') {
-      const h = this.held.get(key);
+      const [first, h] = this.heldOn(key);
       if (!h) return;
-      this.held.delete(key);
-      this.lengthen(h, key);
+      this.held.delete(first);
+      this.lengthen(h, first);
     } else if (this.rec === 'step' && this.chord?.delete(key) && !this.chord.size) {
       this.chord = null;
       this.advance();
     }
+  }
+
+  // A live note by the pad it is on now (a slide moves it): [first key, entry].
+  heldOn(key) {
+    for (const entry of this.held) if (entry[1].cur === key) return entry;
+    return [];
+  }
+
+  // Touch bend and slide of a held key while recording live: points of its curve.
+  bend(key, to, pos) {
+    const h = this.rec === 'live' && this.heldOn(key)[1];
+    if (!h) return;
+    const t = (this.c.timeMs - h.at) / this.stepMs(), last = h.points[h.points.length - 1];
+    to = pos > 0 ? to : 255;
+    if (last && last[1] === key && last[2] === to && last[3] === pos) return;
+    if (last && last[0] === t) h.points.pop();
+    h.points.push([t, key, to, pos]);
+  }
+
+  slide(key, to) {
+    const h = this.rec === 'live' && this.heldOn(key)[1];
+    if (!h) return;
+    h.cur = to;
+    h.points.push([(this.c.timeMs - h.at) / this.stepMs(), to, 255, 0]);
   }
 
   // Hold during step record: a rest, or with keys held a tie (the held
@@ -275,6 +329,8 @@ export class Sequencer {
     }
     const last = this.steps[(h.step + spanned - 1) % len];
     last.gate = clamp(Math.round((duration - (spanned - 1) * ms) / ms * 100), 5, 100);
+    const first = this.steps[h.step];
+    if (h.points.length && first.keys.includes(key)) first.bends = { ...first.bends, [key]: h.points };
     this.changed();
   }
 
@@ -295,7 +351,10 @@ export class Sequencer {
     if ('gate' in values) s.gate = clamp(Math.round(values.gate), 1, 100);
     if ('tie' in values) s.tie = !!values.tie;
     if ('on' in values) s.on = !!values.on;
-    if ('keys' in values) s.keys = [...new Set(values.keys)].filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS);
+    if ('keys' in values) {
+      s.keys = [...new Set(values.keys)].filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS);
+      s.bends = cleanBends(s.bends, s.keys); // a note moved by hand loses its slide
+    }
     if ('oct' in values) s.oct = clamp(Math.round(values.oct), 0, 6);
     if (values.clear) Object.assign(s, emptyStep());
     this.changed();

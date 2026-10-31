@@ -93,8 +93,8 @@
         <h2>Sequencer</h2>
         <ul>
           <li>Long press <b>arp</b> and set <b>mode</b> to <b>seq</b>. The menu also sets the
-            <b>length</b> (1–24 steps, 16 to start), the <b>step</b> (1/4 to 1/32, triplets too), the <b>direction</b>
-            (forward, backward, pendulum, random), <b>swing</b>, and whether live recording <b>adds</b> to the steps or
+            <b>length</b> (1–24 steps, 16 to start), the <b>step</b> (1/4 to 1/32, triplets too), the play direction (<b>play</b>:
+            forward, backward, pendulum, random), <b>swing</b>, and whether live recording <b>adds</b> to the steps or
             <b>replaces</b> them.</li>
           <li>The 24 pads become the <b>steps</b> (arp LED <span class="sw g"></span> green, lit only in this view):
             blue the steps with notes (dim when off), yellow the one playing, dark past the length.
@@ -125,7 +125,9 @@
             Stopped, it records <b>step by step</b> from step 1: each pad or chord writes a step, ❄ writes a rest,
             a pad held + ❄ ties the note into the next step. Playing, it records <b>live</b> at once
             (the pads pulse on the beat), quantized to the nearest step; and every control you move records a motion cycle as
-            long as the pattern, in time with it, replacing that control's old cycle.
+            long as the pattern, in time with it, replacing that control's old cycle. <b>Slides</b> are recorded too:
+            bend a note towards a neighbour pad, or slide onto it, and the sequence plays the same gesture (in time with
+            the tempo); the step's second page draws it as a red line over the note.
             While recording, the screen shows the sequence page with a red title (rec live or rec step), so you see
             the notes arrive and where it is.</li>
           <li>The sequence, its settings and its motion cycles are saved with presets.</li>
