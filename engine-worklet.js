@@ -92,7 +92,7 @@ class SpectrumProcessor extends AudioWorkletProcessor {
       case 'adc':
         for (const [channel, value] of data.values) {
           this.e.spectrum_set_adc(channel, value);
-          if (channel === 7) this.tuneCents = value * 100 - 50;
+          if (channel === 7) { this.tuneAdc = value; this.tuneCents = value * 100 - 50; }
         }
         break;
     }
@@ -101,6 +101,12 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   sendFrame() {
     const c = this.controller;
     c.tick(5);
+    // The tune is an ADC: the LFO moves it here (destination 54).
+    const tune = c.lfo(54);
+    if (tune || this.tuneMoved) {
+      this.e.spectrum_set_adc(7, Math.min(1, Math.max(0, (this.tuneAdc ?? 0.5) + tune / 255)));
+      this.tuneMoved = tune !== 0;
+    }
     new Uint8Array(this.mem.buffer, this.rxPtr, FRAME).set(c.buildFrame());
     if (!this.e.spectrum_frame()) return;
     this.reply.set(new Uint8Array(this.mem.buffer, this.e.spectrum_reply(), FRAME));

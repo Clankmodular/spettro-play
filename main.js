@@ -8,6 +8,7 @@ import { Ui } from './ui.js';
 const panel = new Panel(document.getElementById('instrument'), {
   onControl: (id, v) => ui.control(id, v),
   onTouch: (id) => ui.touchControl(id),
+  onTouchEnd: (id) => ui.touchEnd(id),
   onButton: (id, down) => ui.button(id, down),
   onPad: (index, action, pressure) => ui.pad(index, action, pressure),
   onBend: (index, target, pos) => ui.padBend(index, target, pos),

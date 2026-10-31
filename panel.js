@@ -22,8 +22,9 @@ const KNOB_SWEEP = 300;
 const RING_RADIUS = 31.7;
 
 export class Panel {
-  constructor(container, { onControl, onTouch, onButton, onPad, onBend, onSlide, onScreen }) {
+  constructor(container, { onControl, onTouch, onTouchEnd, onButton, onPad, onBend, onSlide, onScreen }) {
     this.onControl = onControl;
+    this.onTouchEnd = onTouchEnd;
     this.onTouch = onTouch;
     this.onButton = onButton;
     this.onPad = onPad;
@@ -106,38 +107,44 @@ export class Panel {
 
   // Draw a value light at v in a colour (null = the usual yellow) without
   // moving the control: LFO motion, loop and freeze colours.
-  indicate(id, v, color) {
+  // from: start of the light (a range, e.g. an LFO's travel); level: its
+  // brightness.
+  indicate(id, v, color, from = 0, level = 1) {
     const last = this.indicated[id];
-    if (last && Math.abs(last.v - v) < 1e-3 && last.color === color) return;
-    this.indicated[id] = { v, color };
+    if (last && Math.abs(last.v - v) < 1e-3 && last.color === color && last.from === from && last.level === level) return;
+    this.indicated[id] = { v, color, from, level };
     const node = this.rings[id] || this.bars[id]?.rect;
     if (!node) return;
-    if (this.rings[id]) this.ring(id, v); else this.bar(id, v);
-    if (color) { node.style.stroke = color; node.style.fill = color; } else node.removeAttribute('style');
+    const [a, b] = from <= v ? [from, v] : [v, from];
+    if (this.rings[id]) this.ring(id, b, a); else this.bar(id, b, a);
+    if (color) {
+      node.style.stroke = color; node.style.fill = color;
+      node.style.opacity = level < 1 ? String(level) : '';
+    } else node.removeAttribute('style');
   }
 
-  ring(id, v) {
+  ring(id, v, from = 0) {
     const node = this.rings[id];
     if (!node) return;
     const { x, y } = this.centres[id];
-    if (v <= 0.001) { node.setAttribute('d', ''); return; }
-    const a0 = (-KNOB_SWEEP / 2) * Math.PI / 180, a1 = (-KNOB_SWEEP / 2 + KNOB_SWEEP * v) * Math.PI / 180;
+    if (v - from <= 0.001) { node.setAttribute('d', ''); return; }
+    const a0 = (-KNOB_SWEEP / 2 + KNOB_SWEEP * from) * Math.PI / 180, a1 = (-KNOB_SWEEP / 2 + KNOB_SWEEP * v) * Math.PI / 180;
     const p = (a) => `${(x + RING_RADIUS * Math.sin(a)).toFixed(2)} ${(y - RING_RADIUS * Math.cos(a)).toFixed(2)}`;
     // Start a little before the printed end so the round cap fills.
-    const start = a0 - 0.2;
+    const start = from > 0 ? a0 : a0 - 0.2;
     node.setAttribute('d', `M${p(start)}A${RING_RADIUS} ${RING_RADIUS} 0 ${a1 - start > Math.PI ? 1 : 0} 1 ${p(a1)}`);
   }
 
-  bar(id, v) {
+  bar(id, v, from = 0) {
     const entry = this.bars[id];
     if (!entry) return;
     const { bar, rect } = entry;
     if (bar.horizontal) {
-      const w = (bar.x1 - bar.x0) * v;
-      Object.entries({ x: bar.x0, y: bar.y0 - 1, width: w, height: bar.y1 - bar.y0 + 2 }).forEach(([k, val]) => rect.setAttribute(k, val));
+      const w = (bar.x1 - bar.x0) * (v - from);
+      Object.entries({ x: bar.x0 + (bar.x1 - bar.x0) * from, y: bar.y0 - 1, width: w, height: bar.y1 - bar.y0 + 2 }).forEach(([k, val]) => rect.setAttribute(k, val));
     } else {
-      const h = (bar.y1 - bar.y0) * v;
-      Object.entries({ x: bar.x0 - 1, y: bar.y1 - h, width: bar.x1 - bar.x0 + 2, height: h }).forEach(([k, val]) => rect.setAttribute(k, val));
+      const h = (bar.y1 - bar.y0) * (v - from);
+      Object.entries({ x: bar.x0 - 1, y: bar.y1 - (bar.y1 - bar.y0) * v, width: bar.x1 - bar.x0 + 2, height: h }).forEach(([k, val]) => rect.setAttribute(k, val));
     }
   }
 
@@ -183,13 +190,14 @@ export class Panel {
     this.controls[id] = { set };
     let startY = 0, startV = 0, taken = false;
     this.drag(g, {
-      // A touch taken by the UI (LFO assignment) does not turn the knob.
+      // A touch taken by the UI does not turn the knob.
       start: (e) => { taken = !!this.onTouch?.(id); startY = e.clientY; startV = this.values[id]; },
       move: (e) => {
         if (taken) return;
         const fine = e.shiftKey ? 0.2 : 1;
         this.change(id, clamp01(startV + (startY - e.clientY) / 220 * fine));
       },
+      end: () => this.onTouchEnd?.(id),
     });
     g.addEventListener('wheel', (e) => { e.preventDefault(); this.change(id, clamp01(this.values[id] - Math.sign(e.deltaY) / 64)); }, { passive: false });
     g.addEventListener('dblclick', () => this.change(id, this.defaults?.[id] ?? 0.5));
@@ -221,6 +229,7 @@ export class Panel {
         this.change(id, clamp01(v + offset));
       },
       move: (e) => { if (!taken) this.change(id, clamp01(at(e) + offset)); },
+      end: () => this.onTouchEnd?.(id),
     });
     g.addEventListener('wheel', (e) => { e.preventDefault(); this.change(id, clamp01(this.values[id] - Math.sign(e.deltaY) / 64)); }, { passive: false });
     g.addEventListener('dblclick', () => this.change(id, this.defaults?.[id] ?? 0.5));

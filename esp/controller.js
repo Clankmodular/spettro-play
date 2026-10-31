@@ -57,6 +57,9 @@ export function defaultPreset() {
     fxMix: 0.5, // web: dry/effects, 0.5 = both at unity
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
+    // Web: depth of each destination (-255..255, control units from the
+    // control's own value); the amount knob scales them all.
+    lfoDepth: new Array(56).fill(0),
     ccAssignDest: [DEST.None, DEST.None, DEST.None, DEST.None], ccAssignAmount: [0, 0, 0, 0],
     trilloOn: false, bandAttackShape: 0, bandReleaseShape: 0, bandSustainMask: 0xff,
     trilloSpeed: 128, trilloHoldPercent: 50, trilloGroove: 0, trilloPattern: 0,
@@ -70,6 +73,19 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
+  return withLfoDepth(migrateReverb(pr));
+}
+
+// Presets before per-destination depths: every assigned control the full
+// 255 up, as the single LFO offset was.
+function withLfoDepth(pr) {
+  if (Array.isArray(pr.lfoDepth) && pr.lfoDepth.length === 56) return pr;
+  const mask = pr.lfoAssigned || [];
+  const lfoDepth = Array.from({ length: 56 }, (_, d) => (mask[d >> 3] & (1 << (d & 7)) ? 255 : 0));
+  return { ...pr, lfoDepth };
+}
+
+function migrateReverb(pr) {
   if ('freezeDuration' in pr || !('reverbSize' in pr || 'reverbDecay' in pr)) {
     const { freezeDuration, freezeSelection, freezeProbability, ...rest } = pr;
     const lfo = Array.from(pr.lfoAssigned || []);
@@ -626,6 +642,47 @@ export class Controller {
 
   alignBeat() { this.clockStart = this.timeMs; }
 
+  // ---- Web: the note cycle of the motion loop ------------------------------
+  // Recorded on the panel while rec is armed (points [ms, key, pressure],
+  // pressure 0 = off), played here on the 5 ms tick through the keyboard
+  // path, so Hold and the arpeggio work on it. phase: where it is now, in
+  // recorded time; align: start from the top on the next beat (quantize).
+
+  setNoteLoop(loop, align = false) {
+    this.noteLoopRelease();
+    if (!loop || !(loop.length > 0)) { this.noteLoop = null; return; }
+    const rate = loop.rate || 1;
+    const len = loop.length, intoBeat = (this.timeMs - this.clockStart) % this.clockTimeMs;
+    const origin = align ? this.timeMs + (intoBeat ? this.clockTimeMs - intoBeat : 0) : this.timeMs - (loop.phase || 0) / rate;
+    // last: the position already played; events after it and up to the
+    // position of each tick fire (from the top: the one at 0 too).
+    const last = align ? -1 : (((loop.phase || 0) - 1e-6) % len + len) % len;
+    this.noteLoop = { points: loop.points, length: len, rate, origin, last, on: new Set() };
+  }
+
+  noteLoopRelease() {
+    if (!this.noteLoop) return;
+    for (const k of this.noteLoop.on) this.keyOff(k);
+    this.noteLoop.on.clear();
+  }
+
+  noteLoopTick() {
+    const n = this.noteLoop;
+    if (!n) return;
+    if (this.timeMs < n.origin) return; // waiting for the beat
+    const pos = ((this.timeMs - n.origin) * n.rate) % n.length;
+    const fire = (from, to) => {
+      for (const [at, key, p] of n.points) {
+        if (at <= from || at > to) continue;
+        if (p) { if (n.on.has(key)) this.keyOff(key); this.keyOn(key, p); n.on.add(key); }
+        else if (n.on.delete(key)) this.keyOff(key);
+      }
+    };
+    if (pos >= n.last) fire(n.last, pos);
+    else { fire(n.last, n.length); fire(-1, pos); }
+    n.last = pos;
+  }
+
   clockPhase() {
     const period = this.clockTimeMs;
     return Math.trunc(((this.timeMs - this.clockStart) % period) * 256 / period) & 255;
@@ -633,9 +690,15 @@ export class Controller {
 
   // ---- Modulation sums -------------------------
 
+  // Web: the LFO is applied here for every destination, as for attack and
+  // release on the firmware: the Daisy runs it at full amount with no
+  // destinations (frame bytes 57 and 89-95) and reports the wave, 0..255
+  // (TX[34]); each assigned control moves from its value by its own signed
+  // depth, all scaled by the amount knob.
   lfo(d) {
-    const mask = this.pr.lfoAssigned;
-    return SUPPORTED.has(d) && (mask[d >> 3] & (1 << (d & 7))) ? this.lfoOutput : 0;
+    const pr = this.pr, mask = pr.lfoAssigned;
+    if (!SUPPORTED.has(d) || !(mask[d >> 3] & (1 << (d & 7)))) return 0;
+    return (pr.lfoDepth?.[d] ?? 255) * (this.lfoOutput / 255) * (pr.lfoAmount / 255);
   }
 
   cc(d) {
@@ -666,54 +729,49 @@ export class Controller {
       // sustain level), still held, while the repeat plays; new notes sound.
       f[PRESSURE[i]] = (v.owner === OWNER_MIDI && !v.gate) || (this.droneMuted && this.capturedVoice(v)) ? 0 : v.aft;
     }
-    f[6] = clamp(pr.attack + this.lfo(DEST.Attack) + cc(DEST.Attack), 0, 255);
-    f[7] = clamp(pr.release + this.lfo(DEST.Release) + cc(DEST.Release), 0, 255);
-    u16(10, pr.wave_shape + cc(DEST.OscWave) * 255);
-    f[12] = clamp(Math.round(pr.spectralWidth + cc(DEST.Width)), 0, 255);
-    u16(14, pr.spectralRotate + cc(DEST.Rotate) * 255);
-    f[16] = clamp(pr.delayShift + cc(DEST.Dispersion), 0, 255);
+    f[6] = clamp(Math.round(pr.attack + assign(DEST.Attack)), 0, 255);
+    f[7] = clamp(Math.round(pr.release + assign(DEST.Release)), 0, 255);
+    u16(10, pr.wave_shape + assign(DEST.OscWave) * 255);
+    f[12] = clamp(Math.round(pr.spectralWidth + assign(DEST.Width)), 0, 255);
+    u16(14, pr.spectralRotate + assign(DEST.Rotate) * 255);
+    f[16] = clamp(Math.round(pr.delayShift + assign(DEST.Dispersion)), 0, 255);
     const subIndex = pr.subOctave === 4 ? 2 : pr.subOctave === 2 ? 1 : 0;
     f[17] = 1 << clamp(subIndex + Math.round(assign(DEST.SubDivider) * 2 / 255), 0, 2);
-    f[20] = clamp(pr.delayTime + cc(DEST.DelayTime), 0, 255);
-    f[21] = clamp(pr.delayRegen + cc(DEST.Feedback), 0, 255);
-    f[22] = clamp(pr.subWave + cc(DEST.SubWave), 0, 255);
+    f[20] = clamp(Math.round(pr.delayTime + assign(DEST.DelayTime)), 0, 255);
+    f[21] = clamp(Math.round(pr.delayRegen + assign(DEST.Feedback)), 0, 255);
+    f[22] = clamp(Math.round(pr.subWave + assign(DEST.SubWave)), 0, 255);
     f[23] = 0x53;
-    f[24] = clamp(pr.crossMod + cc(DEST.Crossmod), 0, 255);
+    f[24] = clamp(Math.round(pr.crossMod + assign(DEST.Crossmod)), 0, 255);
     u16(25, this.clockTimeMs);
     f[27] = this.restartBits;
     f[28] = pr.delayReverse ? 1 : 0;
     f[29] = 0xb0 | (pr.oscBank >= 0 && pr.oscBank <= 4 ? pr.oscBank : 0); // 4: web External
-    f[30] = clamp(Math.trunc(cc(DEST.Master) * 127 / 255), -127, 127) & 255;
-    f[32] = clamp(pr.spectralBands + cc(DEST.Bands), 0, 255);
+    f[30] = clamp(Math.trunc(assign(DEST.Master) * 127 / 255), -127, 127) & 255;
+    f[32] = clamp(Math.round(pr.spectralBands + assign(DEST.Bands)), 0, 255);
     // Spread: legacy byte 33 plus the u16 extension (spectral_control.h).
-    const spread = clamp(pr.spectralSpread + cc(DEST.Spread), 0, 255);
+    const spread = clamp(pr.spectralSpread + assign(DEST.Spread), 0, 255);
     const spread16 = Math.trunc(clamp(spread / 255, 0, 1) * 65535 + 0.5);
     f[33] = Math.trunc(spread16 / 257); f[113] = 0x53; f[114] = 1; f[115] = spread16 >> 8; f[116] = spread16 & 255;
     f[35] = Math.trunc(IMAGE / 65535 * 255);
-    u16(36, pr.oscSubBlend + cc(DEST.Blend) * 255);
+    u16(36, pr.oscSubBlend + assign(DEST.Blend) * 255);
     f[42] = this.clockPhase();
     f[43] = 0; f[45] = 72;
     f[53] = pr.trilloOn ? 1 : 0;
     f[54] = clamp(pr.subDetuneCents + Math.round(assign(DEST.SubDetune) * 200 / 255), -100, 100) + 100;
-    f[57] = clamp(pr.lfoAmount + assign(DEST.LfoAmount), 0, 255);
+    f[57] = 255; // the wave at full scale; lfo() applies the amount
     f[58] = clamp(pr.lfoWave + Math.round(assign(DEST.LfoWave) * 5 / 255), 0, 5);
     f[59] = clamp(pr.lfoSpeed + assign(DEST.LfoSpeed), 0, 255);
-    f[60] = clamp(pr.reverbSize + cc(DEST.ReverbSize), 0, 255);
+    f[60] = clamp(Math.round(pr.reverbSize + assign(DEST.ReverbSize)), 0, 255);
     f[61] = 255;
-    f[62] = clamp(pr.reverbFuse + cc(DEST.ReverbDetail), 0, 255);
-    f[63] = clamp(pr.delayFeedback + cc(DEST.DelayFeedback), 0, 255);
+    f[62] = clamp(Math.round(pr.reverbFuse + assign(DEST.ReverbDetail)), 0, 255);
+    f[63] = clamp(Math.round(pr.delayFeedback + assign(DEST.DelayFeedback)), 0, 255);
     f[64] = 0xf2;
     f[65] = (pr.bandAttackShape & 15) | ((pr.bandReleaseShape & 15) << 4);
     f[66] = ~pr.bandSustainMask & 255;
-    f[80] = clamp(pr.driveAmount + cc(DEST.Drive), 0, 255);
+    f[80] = clamp(Math.round(pr.driveAmount + assign(DEST.Drive)), 0, 255);
     f[81] = this.analyserRequested ? 0xa6 : 0;
     f[83] = clamp(pr.spectralMode + Math.round(assign(DEST.FilterMode) / 255), 0, 3);
-    f[87] = 0xb7; f[88] = 7;
-    for (let i = 0; i < 7; i++) {
-      let byte = pr.lfoAssigned[i];
-      for (let b = 0; b < 8; b++) if (!SUPPORTED.has(i * 8 + b)) byte &= ~(1 << b);
-      f[89 + i] = byte;
-    }
+    f[87] = 0xb7; f[88] = 7; // bytes 89-95: no Daisy destinations, see lfo()
     return f;
   }
 
@@ -740,6 +798,7 @@ export class Controller {
   tick(ms) {
     this.timeMs += ms;
     while (this.attacks.length && this.timeMs - this.attacks[0] > 16000) this.attacks.shift();
+    this.noteLoopTick();
     this.arpeggio();
     this.midiArpeggio();
     this.refreshVoices();

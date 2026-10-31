@@ -38,6 +38,7 @@ const MODE_COLORS = [LED.blue, LED.yellow, LED.green, LED.red];
 const LOOP_LANES = 24;
 const LOOP_RATES = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
 const rateLabel = (r) => (r < 1 ? `/${Math.round(1 / r)}` : `X${r}`);
+const LOOP_BARS = [1, 2, 3, 4, 6, 8, 12, 16]; // quantize choices (4 beats a bar)
 // Linear mix of two #rrggbb colours, t = 0..1 towards b.
 function mixColor(a, b, t) {
   const c = (hex, i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
@@ -95,7 +96,7 @@ export class Ui {
     this.buttons = {};
     this.taps = [];
     this.bpmFlash = 0;
-    this.lfoLearn = { learning: false, startedAt: 0, touched: false };
+    this.lfoLearn = { learning: false, startedAt: 0, touched: false, drag: null };
     this.loop = { armed: false, lanes: new Map(), completed: new Set(), taps: [], movedSinceTap: false };
     this.loopEdit = null; // rec held: the cycles on the pads (see loopEditPad)
     this.presets = new Presets();
@@ -155,7 +156,7 @@ export class Ui {
   control(id, v, fromLoop = false) {
     if (!fromLoop) {
       // While assigning, controls do not move (wheel and double click included).
-      if (this.lfoLearn.learning) { this.syncPanel(); return; }
+      if (this.lfoLearn.learning) { this.lfoDragTo(id, v); return; }
       this.loopRecord(id, v);
     }
     const b = (x) => Math.round(x * 255), r = this.reverbBank;
@@ -204,21 +205,62 @@ export class Ui {
 
   // ---- LFO assignment (lfo_assignment::Gesture) --------------------------
 
-  // A knob or fader touched while assign is lit toggles its LFO destination;
-  // the touch does not move the control.
+  // Web: while assign is lit, turning a knob or fader sets where the LFO
+  // takes it: from where it was (the start, where it goes back) to where it
+  // is let go (the end, up or down), shown as a white range. A touch
+  // without turning toggles: off if assigned, else the full way up. The
+  // amount knob then scales every destination.
   touchControl(id) {
-    if (!this.lfoLearn.learning) return false;
+    const l = this.lfoLearn;
+    if (!l.learning) return false;
     const d = this.destinationFor(id);
-    if (d !== undefined) { this.toggleLfo(d); this.lfoLearn.touched = true; }
-    return true;
+    if (d === undefined) return true;
+    l.drag = { id, d, start: this.positions()[id], end: null };
+    return false; // the knob turns, but only to show the end
+  }
+
+  lfoDragTo(id, v) {
+    const l = this.lfoLearn, d = this.destinationFor(id);
+    if (d === undefined) { this.syncPanel(); return; }
+    // The wheel turns without a touch: it ends by itself after a pause.
+    if (!l.drag || l.drag.id !== id) l.drag = { id, d, start: this.positions()[id], end: null, wheel: true };
+    l.drag.end = v;
+    if (l.drag.wheel) { clearTimeout(l.drag.timer); l.drag.timer = setTimeout(() => this.touchEnd(id), 700); }
+    const depth = Math.round((v - l.drag.start) * 255);
+    this.display.show(`LFO ${LFO_LABEL[d] || ''} ${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%`, 700);
+  }
+
+  touchEnd(id) {
+    const l = this.lfoLearn, g = l.drag;
+    if (!l.learning || !g || g.id !== id) return;
+    l.drag = null; l.touched = true;
+    clearTimeout(g.timer);
+    const depths = this.pr.lfoDepth.slice(), mask = this.pr.lfoAssigned.slice();
+    const bit = 1 << (g.d & 7), assigned = !!(mask[g.d >> 3] & bit);
+    let depth = g.end === null ? (assigned ? 0 : 255) : Math.round((g.end - g.start) * 255);
+    if (Math.abs(depth) < 3) depth = 0;
+    depths[g.d] = depth;
+    if (depth) mask[g.d >> 3] |= bit; else mask[g.d >> 3] &= ~bit;
+    this.set({ lfoDepth: depths, lfoAssigned: mask });
+    this.panel.set(id, g.start); // back to the start
+    this.display.show(depth ? `LFO ${LFO_LABEL[g.d] || ''} ${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%` : `LFO ${LFO_LABEL[g.d] || ''}: off`, 1000);
   }
 
   toggleLfo(d) {
-    const mask = this.pr.lfoAssigned.slice();
+    const mask = this.pr.lfoAssigned.slice(), depths = this.pr.lfoDepth.slice();
     mask[d >> 3] ^= 1 << (d & 7);
-    this.set({ lfoAssigned: mask });
     const on = !!(mask[d >> 3] & (1 << (d & 7)));
+    depths[d] = on ? 255 : 0;
+    this.set({ lfoAssigned: mask, lfoDepth: depths });
     this.display.show(`LFO ${LFO_LABEL[d] || ''}: ${on ? 'on' : 'off'}`, 1000);
+  }
+
+  // Where the LFO moves a destination now, in panel units (as lfo() in the
+  // controller: signed depth x wave x amount).
+  lfoOffset(d) {
+    const pr = this.pr;
+    if (!(pr.lfoAssigned[d >> 3] & (1 << (d & 7)))) return 0;
+    return (pr.lfoDepth?.[d] ?? 255) / 255 * (this.state.status.lfoOutput / 255) * (pr.lfoAmount / 255);
   }
 
   // ---- Buttons ---------------------------------------------------------
@@ -354,7 +396,7 @@ export class Ui {
     }
     l.learning = false;
     if (t - l.startedAt < 400 && !l.touched) {
-      this.set({ lfoAssigned: new Uint8Array(7) });
+      this.set({ lfoAssigned: new Uint8Array(7), lfoDepth: new Array(56).fill(0) });
       this.display.show('LFO: all cleared', 1000);
     } else this.display.show('LFO assign off', 700);
   }
@@ -519,9 +561,11 @@ export class Ui {
     }
     if (action === 'on') {
       this.lastKey = index;
-      this.call('keyOn', index, pressure == null ? 255 : this.touchPressure(pressure));
+      const p = pressure == null ? 255 : this.touchPressure(pressure);
+      this.call('keyOn', index, p);
+      this.loopRecordNote(index, p);
     } else if (action === 'pressure') this.call('keyPressure', index, this.touchPressure(pressure));
-    else this.call('keyOff', index);
+    else { this.call('keyOff', index); this.loopRecordNote(index, 0); }
   }
 
   // Touch bend from pad index towards target, pos 0..1; off with the
@@ -590,7 +634,7 @@ export class Ui {
   beatMs() { return 60000 / (this.bpm || 110); }
   loopMaxMs() { return 64 * this.beatMs(); }
   // Play position of a cycle in its recorded time, at its speed.
-  lanePos(lane, t) { return ((t - lane.origin) * (lane.rate || 1)) % lane.length; }
+  lanePos(lane, t) { const L = lane.length; return (((t - lane.origin) * (lane.rate || 1)) % L + L) % L; }
 
   loopState() {
     const L = this.loop;
@@ -604,6 +648,7 @@ export class Ui {
     L.taps = L.taps.filter((x) => t - x < 320);
     if (L.taps.length && !L.movedSinceTap) {
       L.taps = []; L.armed = false; L.lanes.clear();
+      this.sendNoteLoop(null);
       this.display.show('loop cleared', 900);
       return;
     }
@@ -624,6 +669,37 @@ export class Ui {
     lane.length = clamp(end - lane.origin, 1, this.loopMaxMs());
     lane.points = lane.points.filter(([at]) => at < lane.length);
     lane.idx = -1;
+    if (!lane.notes) return;
+    // Notes still held at the end stop with the cycle.
+    const held = new Set();
+    for (const [, key, p] of lane.points) if (p) held.add(key); else held.delete(key);
+    for (const key of held) lane.points.push([lane.length - 1, key, 0]);
+    this.sendNoteLoop(lane);
+  }
+
+  // Web: notes played while rec is armed make one cycle of their own (id
+  // 'notes'), from the first note to the closing press; a new take with notes
+  // replaces it. The worklet plays it (Controller.setNoteLoop).
+  loopRecordNote(key, pressure) {
+    const L = this.loop, t = now();
+    if (!L.armed || L.completed.has('notes')) return;
+    let lane = L.lanes.get('notes');
+    if (!lane && !pressure) return; // a release before the first note
+    L.movedSinceTap = true;
+    if (!lane || lane.length) {
+      if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('notes'); return; }
+      if (lane) this.sendNoteLoop(null);
+      lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true };
+      L.lanes.set('notes', lane);
+    }
+    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t); L.completed.add('notes'); return; }
+    lane.points.push([t - lane.origin, key, pressure]);
+  }
+
+  // The note cycle to the worklet: where it is now, or on the beat (align).
+  sendNoteLoop(lane, align = false) {
+    const loop = lane?.length ? { points: lane.points, length: lane.length, rate: lane.rate || 1, phase: this.lanePos(lane, now()) } : null;
+    this.call('setNoteLoop', loop, align);
   }
 
   loopRecord(id, v) {
@@ -647,6 +723,7 @@ export class Ui {
         if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, lane.origin + this.loopMaxMs()); L.completed.add(id); }
         continue;
       }
+      if (lane.notes) continue; // played by the worklet
       const pos = this.lanePos(lane, t);
       let i = 0;
       while (i + 1 < lane.points.length && lane.points[i + 1][0] <= pos) i++;
@@ -655,6 +732,7 @@ export class Ui {
       const v = lane.points[i][1];
       this.panel.set(id, v);
       this.control(id, v, true);
+      if (this.loopEdit) this.loopEditIndicate(id);
     }
   }
 
@@ -664,7 +742,7 @@ export class Ui {
     for (const [id, lane] of this.loop.lanes) {
       const length = lane.length || clamp(t - lane.origin, 1, this.loopMaxMs());
       lanes.push([id, { length, phase: lane.length ? this.lanePos(lane, t) : (t - lane.origin) % length,
-        points: lane.points.filter(([at]) => at < length), rate: lane.rate || 1 }]);
+        points: lane.points.filter(([at]) => at < length), rate: lane.rate || 1, ...(lane.notes ? { notes: true } : {}) }]);
     }
     return lanes.length ? { version: 2, lanes } : null;
   }
@@ -677,33 +755,36 @@ export class Ui {
       const c = Array.isArray(lane) ? { length: clip.length, phase: 0, points: lane } : lane;
       const rate = LOOP_RATES.includes(c.rate) ? c.rate : 1;
       if (c.length > 0 && c.points?.length && L.lanes.size < LOOP_LANES) {
-        L.lanes.set(id, { origin: t - c.phase / rate, length: c.length, points: c.points, idx: -1, rate });
+        L.lanes.set(id, { origin: t - c.phase / rate, length: c.length, points: c.points, idx: -1, rate, ...(c.notes ? { notes: true } : {}) });
       }
     }
+    this.sendNoteLoop(L.lanes.get('notes') || null);
   }
 
   // ---- Loop page (web): rec held 500 ms. Every LED goes dark but rec
   // (blinking blue); the pads show the cycles in recording order, blue. A pad:
-  // its control blinks and the screen draws its cycle; held, the speed is
-  // in focus (/16 to X16, screen arrows or wheel; the encoder on the
-  // instrument); a double tap deletes it. A tap on rec or any other button
-  // leaves.
+  // its control steady blue and the screen draws its cycle and its speed
+  // (/16 to X16, screen arrows or wheel; the encoder on the instrument);
+  // held 400 ms, the quantize page; a double tap deletes it. A tap on rec or
+  // any other button leaves.
 
   openLoopEdit() {
     this.openPage('loops');
     const lanes = [...this.loop.lanes.values()].filter((l) => l.length);
-    this.loopEdit = { sel: lanes.length ? 0 : -1, lastPad: -1, lastTap: 0, speedFocus: false, timer: 0 };
+    this.loopEdit = { sel: lanes.length ? 0 : -1, lastPad: -1, lastTap: 0, timer: 0, quant: null };
   }
 
   loopEditIds() { return [...this.loop.lanes.keys()]; }
 
   loopEditPad(index, down) {
     const e = this.loopEdit, ids = this.loopEditIds(), t = now();
-    if (!down) { clearTimeout(e.timer); e.speedFocus = false; return; }
+    if (!down) { clearTimeout(e.timer); return; }
+    e.quant = null;
     if (index >= ids.length) return;
     if (e.lastPad === index && t - e.lastTap < 320) {
       const id = ids[index];
       this.loop.lanes.delete(id);
+      if (id === 'notes') this.sendNoteLoop(null);
       this.syncPanel();
       this.display.show(`${this.loopName(id)} cleared`, 900);
       e.sel = Math.min(index, this.loop.lanes.size - 1);
@@ -712,7 +793,36 @@ export class Ui {
     }
     e.sel = index; e.lastPad = index; e.lastTap = t;
     clearTimeout(e.timer);
-    e.timer = setTimeout(() => { e.speedFocus = true; }, 400);
+    e.timer = setTimeout(() => this.openQuantize(), 400);
+  }
+
+  // Quantize: the bars the cycle should last as heard (at its speed),
+  // starting from the nearest choice.
+  openQuantize() {
+    const e = this.loopEdit, lane = this.loop.lanes.get(this.loopEditIds()[e?.sel]);
+    if (!lane?.length) return;
+    const bars = lane.length / (lane.rate || 1) / (4 * this.beatMs());
+    let best = 0;
+    LOOP_BARS.forEach((b, i) => { if (Math.abs(Math.log(b / bars)) < Math.abs(Math.log(LOOP_BARS[best] / bars))) best = i; });
+    e.quant = { bars: best, now: bars };
+  }
+
+  // Stretch the cycle to the chosen bars and start it from the top on the
+  // next beat (until then it plays on from the end of the new cycle).
+  applyQuantize() {
+    const e = this.loopEdit, id = this.loopEditIds()[e.sel], lane = this.loop.lanes.get(id);
+    if (!lane?.length || !e.quant) return;
+    const rate = lane.rate || 1, length = LOOP_BARS[e.quant.bars] * 4 * this.beatMs() * rate;
+    const k = length / lane.length;
+    lane.points = lane.points.map(([at, ...rest]) => [at * k, ...rest]);
+    lane.length = length;
+    lane.idx = -1;
+    const beat = this.beatMs(), t = now();
+    const into = ((this.state?.status.clockPhase ?? 0) / 256) * beat;
+    lane.origin = t + (into ? beat - into : 0);
+    if (lane.notes) this.sendNoteLoop(lane, true);
+    this.display.show(`${this.loopName(id)} ${LOOP_BARS[e.quant.bars]} bar`, 900);
+    e.quant = null;
   }
 
   loopSpeed(step) {
@@ -723,6 +833,7 @@ export class Ui {
     const i = clamp(LOOP_RATES.indexOf(lane.rate || 1) + step, 0, LOOP_RATES.length - 1);
     lane.rate = LOOP_RATES[i];
     lane.origin = t - pos / lane.rate; // the position goes on from where it is
+    if (lane.notes) this.sendNoteLoop(lane);
   }
 
   loopName(id) {
@@ -734,17 +845,39 @@ export class Ui {
   drawLoops(ctx) {
     const e = this.loopEdit, ids = this.loopEditIds(), id = ids[e.sel], lane = id && this.loop.lanes.get(id);
     const done = lane?.length > 0;
+    if (e.quant && done) {
+      const q = e.quant, bars = LOOP_BARS[q.bars];
+      return P.drawQuantizePage(ctx, { name: this.loopName(id), bars: `${bars} bar${bars > 1 ? 's' : ''}`, now: `${q.now.toFixed(2)} bars` }, {
+        bars: (n) => { q.bars = clamp(q.bars + Math.sign(n), 0, LOOP_BARS.length - 1); },
+        yes: () => this.applyQuantize(), no: () => { e.quant = null; },
+      });
+    }
     return P.drawLoopPage(ctx, {
       name: id ? this.loopName(id) : '', count: ids.length, lane: done ? lane : null,
-      pos: done ? this.lanePos(lane, now()) : 0, speed: done ? rateLabel(lane.rate || 1) : '', speedFocus: e.speedFocus,
+      pos: done ? this.lanePos(lane, now()) : 0, speed: done ? rateLabel(lane.rate || 1) : '',
     }, { back: () => this.openPage('analyser'), speed: (n) => this.loopSpeed(n) });
+  }
+
+  // Value light of a control on the loop page: the chosen one blue at its
+  // value, the others dark. Also right after the loop moves a control, or
+  // the panel would show it yellow until the next frame.
+  loopEditIndicate(id, pos = this.positions()) {
+    const sel = this.loopEditIds()[this.loopEdit.sel];
+    this.panel.indicate(id, id === sel ? pos[id] : 0, id === sel ? LED.blue : null);
   }
 
   loopEditLeds() {
     const p = this.panel, t = now(), e = this.loopEdit, ids = this.loopEditIds();
     for (const id of Object.keys(p.leds)) p.light(id, id === 'loop' ? ((t % 400) < 200 ? LED.blue : null) : null);
-    const pos = this.positions(), sel = ids[e.sel];
-    for (const id of p.valueLights()) p.indicate(id, id === sel && (t % 400) < 200 ? pos[id] : 0, id === sel ? LED.blue : null);
+    // The chosen control steady blue, following its cycle; the transpose
+    // also on its 12 LEDs (+ from the bottom, - from the top).
+    const sel = ids[e.sel];
+    const pos = this.positions();
+    for (const id of p.valueLights()) this.loopEditIndicate(id, pos);
+    if (sel === 'transpose') {
+      const tr = this.pr.articulationDegreeTranspose;
+      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? LED.blue : null);
+    }
     for (let k = 0; k < KEYS; k++) p.padLight(k, k < ids.length ? LED.blue : null, k === e.sel ? 1 : 0.4);
   }
 
@@ -851,7 +984,7 @@ export class Ui {
     // filters take the filter-mode colour and follow their own envelopes.
     // Assigned to the LFO: the count with the LFO offset added, white.
     const bandsLfo = (pr.lfoAssigned[DEST.Bands >> 3] & (1 << (DEST.Bands & 7))) !== 0;
-    const amount = 1 + clamp(pr.spectralBands / 255 + (bandsLfo ? status.lfoOutput / 255 : 0), 0, 1) * 7;
+    const amount = 1 + clamp(pr.spectralBands / 255 + (bandsLfo ? this.lfoOffset(DEST.Bands) : 0), 0, 1) * 7;
     const levels = this.state.bandLevels || [];
     const sounding = levels.some((l) => l > 0.01);
     for (let i = 0; i < 8; i++) {
@@ -914,20 +1047,23 @@ export class Ui {
     const L = this.loopState();
     p.light('loop', L === 'armed' ? (blink(400) ? LED.orange : null) : L === 'recording' ? LED.red : L === 'playing' ? LED.blue : null);
 
-    // Rings and bars: yellow up to the value; LFO knobs white; a control
-    // assigned to the LFO white, with the LFO offset added (lfo_assignment
-    // Offset, reported in TX[34]); a control played by the loop blue; the
-    // three knobs by Δt red in the reverb bank.
-    const pos = this.positions(), lfo = status.lfoOutput / 255;
+    // Rings and bars: yellow up to the value; speed white; amount white and
+    // dim over its whole travel, brightening with the wave; a control
+    // assigned to the LFO white at its value moved by the LFO; while its
+    // end is being set, the white range from start to end; a control played
+    // by the loop blue; the three knobs by Δt red in the reverb bank.
+    const pos = this.positions(), wave = status.lfoOutput / 255, drag = this.lfoLearn.drag;
     for (const id of p.valueLights()) {
       const d = this.destinationFor(id);
+      if (drag?.id === id && drag.end !== null) { p.indicate(id, drag.end, LED.white, drag.start); continue; }
+      if (id === 'amount') { p.indicate(id, pos[id], LED.white, 0, 0.2 + 0.8 * wave); continue; }
       const assigned = d !== undefined && (pr.lfoAssigned[d >> 3] & (1 << (d & 7))) !== 0;
       const looped = this.loop.lanes.get(id)?.length > 0;
       const reverb = this.reverbBank && (id === 'time' || id === 'spread' || id === 'diffuse');
       const drone = id === 'transpose' && this.drone();
-      const color = id === 'amount' || id === 'speed' || assigned ? LED.white : looped ? LED.blue : reverb ? LED.red
+      const color = id === 'speed' || assigned ? LED.white : looped ? LED.blue : reverb ? LED.red
         : drone ? LED.violet : null;
-      p.indicate(id, clamp(pos[id] + (assigned ? lfo : 0), 0, 1), color);
+      p.indicate(id, clamp(pos[id] + (assigned ? this.lfoOffset(d) : 0), 0, 1), color);
     }
 
     // Pads: envelope level in yellow (red above 235), arpeggio stack in white.

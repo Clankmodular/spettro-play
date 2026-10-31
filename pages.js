@@ -11,10 +11,14 @@ const ARROW_W = 22;
 
 function header(ctx, title, right, back) {
   const text = back ? `< ${title}` : title;
+  // Room left of the right-hand label.
+  const room = 208 - (right ? textWidth(right, 2) + 8 : 0);
   let size = 3;
-  while (size > 1 && textWidth(text, size) > 208) size--;
-  drawText(ctx, text, 16, 17, size, back ? COLOR.secondary : COLOR.normal);
-  if (back) drawText(ctx, title, 16 + textWidth('< ', size), 17, size, COLOR.normal);
+  while (size > 1 && textWidth(text, size) > room) size--;
+  // '< ' grey, then the title over it in white: offset by the text minus the
+  // title (textWidth('< ') would drop the trailing space).
+  drawText(ctx, back ? '<' : title, 16, 17, size, back ? COLOR.secondary : COLOR.normal);
+  if (back) drawText(ctx, title, 16 + textWidth(text, size) - textWidth(title, size), 17, size, COLOR.normal);
   if (right) drawText(ctx, right, 224, 21, 2, COLOR.secondary, 'right');
   ctx.fillStyle = COLOR.rule;
   ctx.fillRect(16, 46, 208, 1);
@@ -78,7 +82,16 @@ export function drawLoopPage(ctx, m, act) {
   const px = (at) => X + 4 + Math.round((W - 8) * at / len);
   const py = (v) => Y + 4 + Math.round((H - 8) * (1 - v));
   ctx.fillStyle = COLOR.highlight;
-  for (let i = 0; i < pts.length; i++) {
+  // Notes: a bar per note, one row of 4 px per pad (pad 1 at the top).
+  if (m.lane.notes) {
+    const open = new Map();
+    const bar = (key, from, to) => ctx.fillRect(px(from), Y + 6 + key * 4 + 1, Math.max(2, px(to) - px(from)), 3);
+    for (const [at, key, p] of pts) {
+      if (open.has(key)) { bar(key, open.get(key), at); open.delete(key); }
+      if (p) open.set(key, at);
+    }
+    for (const [key, from] of open) bar(key, from, len);
+  } else for (let i = 0; i < pts.length; i++) {
     const x0 = px(pts[i][0]), x1 = i + 1 < pts.length ? px(pts[i + 1][0]) : X + W - 4;
     const y = py(pts[i][1]);
     ctx.fillRect(x0, y - 1, Math.max(2, x1 - x0), 2);
@@ -89,9 +102,22 @@ export function drawLoopPage(ctx, m, act) {
   }
   ctx.fillStyle = COLOR.normal;
   ctx.fillRect(px(m.pos), Y, 2, H);
-  card(ctx, 12, 180, 216, 54, 'speed', m.speed, m.speedFocus ? 'focus' : 'idle', 3, true);
+  card(ctx, 12, 180, 216, 54, 'speed', m.speed, 'focus', 3, true);
   regions.push({ x: 12, y: 180, w: 216, h: 54, select: () => {}, step: act.speed });
   return regions;
+}
+
+// Quantize a cycle (loop page, pad held): how many bars it should last; yes
+// stretches it to them and starts it on the beat, no leaves it.
+export function drawQuantizePage(ctx, m, act) {
+  header(ctx, 'quantize', m.name, act.no);
+  card(ctx, 12, 54, 216, 70, 'bars', m.bars, 'focus', 4, true);
+  card(ctx, 12, 130, 216, 44, 'now', m.now, 'idle', 2);
+  card(ctx, 12, 180, 104, 54, '', 'yes', 'focus', 3);
+  card(ctx, 124, 180, 104, 54, '', 'no', 'idle', 3);
+  return [{ x: 0, y: 0, w: 240, h: 46, click: act.no },
+    { x: 12, y: 54, w: 216, h: 70, select: () => {}, step: act.bars },
+    { x: 12, y: 180, w: 104, h: 54, click: act.yes }, { x: 124, y: 180, w: 104, h: 54, click: act.no }];
 }
 
 export function drawListPage(ctx, title, menu, items, right, back) {
