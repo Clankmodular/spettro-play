@@ -49,10 +49,11 @@ export function defaultPreset() {
     spectralRotate: 32767.5, spectralWidth: 63.75, spectralBands: 255, spectralSpread: 128,
     spectralMode: 0, delayTime: 0, delayRegen: 0, delayShift: 0, delayReverse: 0,
     // Web: the freeze slots carry reverb size (255 = the firmware hall),
-    // reverb detail (0 = the firmware tank, 255 = one loop per band) and
+    // reverb detail (reverbFuse: 0 = one loop per band, 255 = the firmware
+    // tank) and
     // delay feedback (240 and up: hold), changed in the web build of the
     // Daisy DSP. Diffuse (delayRegen) holds the reverb from 240.
-    reverbSize: 255, reverbDetail: 0, delayFeedback: 0, driveAmount: 0,
+    reverbSize: 255, reverbFuse: 255, delayFeedback: 0, driveAmount: 0,
     fxMix: 0.5, // web: dry/effects, 0.5 = both at unity
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
@@ -66,19 +67,24 @@ export function defaultPreset() {
 // Older presets. With the freeze: the firmware hall, no detail, no
 // feedback, and the LFO assignments of the freeze controls dropped. With
 // reverb decay and bands (30 October) or tilt (until 31 October): they go,
-// detail 0 (the firmware tank) and no LFO on it.
+// the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
+// ran the other way: 0 was the tank.
 export function migratePreset(pr) {
   if ('freezeDuration' in pr || !('reverbSize' in pr || 'reverbDecay' in pr)) {
     const { freezeDuration, freezeSelection, freezeProbability, ...rest } = pr;
     const lfo = Array.from(pr.lfoAssigned || []);
     if (lfo.length > 3) lfo[3] &= ~((1 << 1) | (1 << 2) | (1 << 3)); // DEST 25, 26, 27
-    return { ...rest, reverbSize: 255, reverbDetail: 0, delayFeedback: 0, lfoAssigned: lfo };
+    return { ...rest, reverbSize: 255, reverbFuse: 255, delayFeedback: 0, lfoAssigned: lfo };
   }
   if ('reverbDecay' in pr || 'reverbTilt' in pr) {
     const { reverbDecay, reverbBands, reverbTilt, ...rest } = pr;
     const lfo = Array.from(pr.lfoAssigned || []);
     if (lfo.length > 3) lfo[3] &= ~(1 << 2); // DEST 26
-    return { ...rest, reverbSize: 'reverbDecay' in pr ? 255 : pr.reverbSize, reverbDetail: 0, lfoAssigned: lfo };
+    return { ...rest, reverbSize: 'reverbDecay' in pr ? 255 : pr.reverbSize, reverbFuse: 255, lfoAssigned: lfo };
+  }
+  if ('reverbDetail' in pr) {
+    const { reverbDetail, ...rest } = pr;
+    return { ...rest, reverbFuse: 255 - reverbDetail };
   }
   return pr;
 }
@@ -693,7 +699,7 @@ export class Controller {
     f[59] = clamp(pr.lfoSpeed + assign(DEST.LfoSpeed), 0, 255);
     f[60] = clamp(pr.reverbSize + cc(DEST.ReverbSize), 0, 255);
     f[61] = 255;
-    f[62] = clamp(pr.reverbDetail + cc(DEST.ReverbDetail), 0, 255);
+    f[62] = clamp(pr.reverbFuse + cc(DEST.ReverbDetail), 0, 255);
     f[63] = clamp(pr.delayFeedback + cc(DEST.DelayFeedback), 0, 255);
     f[64] = 0xf2;
     f[65] = (pr.bandAttackShape & 15) | ((pr.bandReleaseShape & 15) << 4);

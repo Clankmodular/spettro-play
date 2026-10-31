@@ -126,7 +126,7 @@ export class Ui {
       xmod: pr.crossMod / 255, blend: blendToPanel(pr.oscSubBlend) / 65535, oscA: pr.subWave / 255,
       oscB: pr.wave_shape / 65535, drive: pr.driveAmount / 255, fx: pr.fxMix,
       volume: this.adc.volume, tune: this.adc.tune, touch: 0.5,
-      time: (r ? pr.reverbSize : pr.delayTime) / 255, spread: (r ? pr.reverbDetail : pr.delayShift) / 255,
+      time: (r ? pr.reverbSize : pr.delayTime) / 255, spread: (r ? pr.reverbFuse : pr.delayShift) / 255,
       diffuse: (r ? pr.delayRegen : pr.delayFeedback) / 255,
       attack: pr.attack / 255, release: pr.release / 255,
       transpose: this.drone() ? (this.stutterStep + 0.5) / 12 : (pr.articulationDegreeTranspose + 12) / 24,
@@ -168,7 +168,7 @@ export class Ui {
       case 'drive': return this.set({ driveAmount: b(v) });
       case 'fx': return this.set({ fxMix: v });
       case 'time': return this.set(r ? { reverbSize: b(v) } : { delayTime: b(v) });
-      case 'spread': return this.set(r ? { reverbDetail: b(v) } : { delayShift: b(v) });
+      case 'spread': return this.set(r ? { reverbFuse: b(v) } : { delayShift: b(v) });
       case 'diffuse': return this.set(r ? { delayRegen: b(v) } : { delayFeedback: b(v) });
       case 'attack': return this.set({ attack: b(v) });
       case 'release': return this.set({ release: b(v) });
