@@ -256,8 +256,9 @@ export class Controller {
     }
     this.keyDown[key] = 1;
     this.keyAftertouch[key] = pressure;
-    // While paused by Hold, a new key clears the stack and resumes.
-    if (this.pr.trilloOn && this.arpPaused) { this.keyStack = []; this.arpPaused = false; this.pr.latchedNote = true; }
+    // While paused by Hold, a new key clears the stack and starts a fresh
+    // arpeggio, with Hold still off as on the firmware (touchDown).
+    if (this.pr.trilloOn && this.arpPaused) { this.keyStack = []; this.arpPaused = false; }
     this.keyStack = this.keyStack.filter((k) => k !== key);
     this.keyStack.push(key);
     // With the arpeggio on, keys only feed the stack.
