@@ -7,15 +7,13 @@ import { defaultPreset, migratePreset, DEST, STUTTER } from './esp/controller.js
 import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js';
 import { PATTERNS, GROOVES, DIVISIONS, divisionIndex, speedForDivision } from './esp/trillo.js';
 import * as P from './pages.js';
-import { MODES, BANKS, setFont } from './display.js';
-import { FONTS } from './fonts.js';
+import { MODES, BANKS } from './display.js';
 import { Presets, SLOTS } from './presets.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
 const ADC_TUNE = 7, ADC_MASTER = 8;
 const LATENCY_KEY = 'spettro.latency';
-const FONT_KEY = 'spettro.font'; // web: screen font being tried (setup page)
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const BANK_ORDER = [0, 2, 3, 1, 4]; // Classic, Fold, Noise, Exciter, External (oscillator::Next)
 const LFO_WAVES = ['tri', 'ramp', 'saw', 'square', 'random']; // Daisy waves 1..5
@@ -85,9 +83,6 @@ const sustainLabel = (c) => (c === 0 ? 'none' : c === 8 ? 'all' : c >= 16 ? 'cus
 
 export class Ui {
   constructor(panel, display) {
-    this.screenFont = 'org01';
-    try { this.screenFont = localStorage.getItem(FONT_KEY) || 'org01'; } catch { /* default */ }
-    setFont(this.screenFont);
     this.panel = panel;
     this.display = display;
     this.pr = defaultPreset();
@@ -1273,19 +1268,8 @@ export class Ui {
       ['fact. reset', '', { click: () => { this.factoryReset(); this.display.show('factory reset', 1000); } }],
       ['export presets', '', { click: () => this.exportPresets() }],
       ['audio load', load ? `${Math.round(load.load * 100)}% pk ${Math.round(load.peak * 100)}%` : '-'],
-      [safe ? 'latency safe' : 'latency low', c ? `${latency}ms ${c.sampleRate / 1000}k` : '-', { click: () => this.setLatencyHint(safe ? 'interactive' : 'playback') }],
-      ['font', FONTS[this.fontIndex()].label, { step: (n) => this.setScreenFont(n) }]],
+      [safe ? 'latency safe' : 'latency low', c ? `${latency}ms ${c.sampleRate / 1000}k` : '-', { click: () => this.setLatencyHint(safe ? 'interactive' : 'playback') }]],
     '', toSystem);
-  }
-
-  // Web: screen fonts to try, remembered in this browser (fonts.js).
-  fontIndex() { return Math.max(0, FONTS.findIndex((f) => f.name === this.screenFont)); }
-
-  setScreenFont(step) {
-    const font = FONTS[(this.fontIndex() + step + FONTS.length) % FONTS.length];
-    this.screenFont = font.name;
-    try { localStorage.setItem(FONT_KEY, font.name); } catch { /* this session only */ }
-    setFont(font.name);
   }
 
   // Audio buffer: 'interactive' (lowest latency) or 'playback' (larger and

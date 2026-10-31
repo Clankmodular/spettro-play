@@ -7,15 +7,7 @@
 // device pixels so the text stays crisp; the analyser curves are vector
 // paths sampled every half unit.
 
-import { FONTS } from './fonts.js';
-
-// Web: the screen font can be tried (System -> setup -> font); Org_01 is the
-// instrument's. Every font is in the Adafruit GFX layout. A requested size
-// becomes the whole-pixel scale giving caps about as tall as Org_01's (5 px
-// a size); Org_01 keeps its sizes.
-let FONT = FONTS[0].font;
-export function setFont(name) { FONT = (FONTS.find((f) => f.name === name) || FONTS[0]).font; }
-const pixels = (size) => (FONT === FONTS[0].font ? size : Math.max(1, Math.round(size * 5 / FONT.cap)));
+import { ORG01 } from './org01.js';
 
 export const SIZE = 240;
 // The firmware leaves 12-16 px margins; the web screen shows the useful area
@@ -39,7 +31,7 @@ const BANKS = { 0: 'classic', 1: 'exciter', 2: 'fold', 3: 'noise', 4: 'external'
 
 function glyph(c) {
   const code = c.charCodeAt(0);
-  return code >= 0x20 && code <= 0x7e ? FONT.glyphs[code - 0x20] : null;
+  return code >= 0x20 && code <= 0x7e ? ORG01.glyphs[code - 0x20] : null;
 }
 
 export function textWidth(text, size = 1) {
@@ -48,7 +40,7 @@ export function textWidth(text, size = 1) {
     const g = glyph(text[i]);
     if (g) w += i < text.length - 1 ? g[3] : g[4] + g[1];
   }
-  return w * pixels(size);
+  return w * size;
 }
 
 // Top-left datum like TFT_eSPI TL_DATUM; scale maps font pixels to screen.
@@ -62,9 +54,9 @@ function drawGlyphs(ctx, text, x, y, color, scale) {
     for (let row = 0; row < h; row++)
       for (let col = 0; col < w; col++) {
         const bit = row * w + col;
-        if (!(FONT.bitmap[offset + (bit >> 3)] & (0x80 >> (bit & 7)))) continue;
+        if (!(ORG01.bitmap[offset + (bit >> 3)] & (0x80 >> (bit & 7)))) continue;
         const left = scale(advance + xOffset + col), right = scale(advance + xOffset + col + 1);
-        const top = scale(FONT.top + yOffset + row), bottom = scale(FONT.top + yOffset + row + 1);
+        const top = scale(4 + yOffset + row), bottom = scale(4 + yOffset + row + 1);
         ctx.fillRect(x + left, y + top, right - left, bottom - top);
       }
     advance += xAdvance;
@@ -75,14 +67,13 @@ export function drawText(ctx, text, x, y, size, color, align = 'left') {
   const w = textWidth(text, size);
   if (align === 'center') x -= w / 2;
   else if (align === 'right') x -= w;
-  const k = pixels(size);
-  drawGlyphs(ctx, text, Math.round(x), Math.round(y), color, (v) => v * k);
+  drawGlyphs(ctx, text, Math.round(x), Math.round(y), color, (v) => v * size);
 }
 
 // Analyser titles: Org_01 rasterized at 23/10 (analyserTitlePixel).
-const titlePixel = (v) => (FONT === FONTS[0].font ? Math.trunc((v * 23 + 5) / 10) : v * pixels(2.3));
+const titlePixel = (v) => Math.trunc((v * 23 + 5) / 10);
 function drawTitle(ctx, text, x, y, color) { drawGlyphs(ctx, text, x, y, color, titlePixel); }
-const titleWidth = (text) => titlePixel(textWidth(text) / pixels(1));
+const titleWidth = (text) => titlePixel(textWidth(text));
 
 export class Display {
   constructor(canvas) {
