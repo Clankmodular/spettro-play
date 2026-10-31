@@ -14,7 +14,8 @@ function header(ctx, title, right, back) {
   let size = 3;
   while (size > 1 && textWidth(text, size) > 208) size--;
   drawText(ctx, text, 16, 17, size, back ? COLOR.secondary : COLOR.normal);
-  if (back) drawText(ctx, title, 16 + textWidth('< ', size), 17, size, COLOR.normal);
+  // The advance of '< ' (textWidth of a string ending in a space leaves the space out).
+  if (back) drawText(ctx, title, 16 + textWidth(text, size) - textWidth(title, size), 17, size, COLOR.normal);
   if (right) drawText(ctx, right, 224, 21, 2, COLOR.secondary, 'right');
   ctx.fillStyle = COLOR.rule;
   ctx.fillRect(16, 46, 208, 1);
@@ -49,10 +50,11 @@ function card(ctx, x, y, w, h, label, value, state = 'idle', valueSize = 3, with
 }
 
 // Rows of a list page. Item: [label, value, { step, click }]. Three tall
-// cards as on the instrument, or compact rows when the list is longer.
+// cards as on the instrument, or compact rows when the list is longer
+// (narrower still for six).
 function rows(ctx, menu, items) {
   const compact = items.length > 3;
-  const top = compact ? 52 : 54, h = compact ? 33 : 54, gap = compact ? 3 : 6;
+  const top = compact ? 52 : 54, h = items.length > 5 ? 27 : compact ? 33 : 54, gap = compact ? 3 : 6;
   return items.map(([label, value, act = {}], i) => {
     const y = top + i * (h + gap);
     card(ctx, 12, y, 216, h, label, value, menu.row === i ? 'focus' : 'idle', 3, !!act.step);

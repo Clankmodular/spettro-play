@@ -7,6 +7,7 @@
 
 import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js';
 import { Sequence, stepsPerBeat, groovePressure, grooveDelay, PLAYED_PRESSURE } from './trillo.js';
+import { Sequencer } from './sequencer.js';
 
 export const FRAME = 128;
 const VOICES = 5;
@@ -14,7 +15,7 @@ const NOTE = [1, 18, 19, 124, 77], CENTS = [2, 75, 76, 125, 78], GATE = [0, 69, 
 const TRIGGER = [8, 70, 72, 127, 56], PRESSURE = [5, 73, 74, 13, 79], ENVELOPE = [16, 21, 23, 18, 31];
 const OCTAVES = [0.125, 0.25, 0.5, 1, 2, 4, 8];
 const MIN_FREQ = 27.5, MAX_FREQ = 6535.5;
-const OWNER_KEYBOARD = 0, OWNER_MIDI = 1;
+const OWNER_KEYBOARD = 0, OWNER_MIDI = 1, OWNER_SEQ = 2; // seq: web sequencer, played as pad keys
 const ENV_ACTIVE = 2;
 
 // Modulation destination IDs (shared/modulation_destinations.h).
@@ -59,6 +60,9 @@ export function defaultPreset() {
     trilloOn: false, bandAttackShape: 0, bandReleaseShape: 0, bandSustainMask: 0xff,
     trilloSpeed: 128, trilloHoldPercent: 50, trilloGroove: 0, trilloGrooveAmount: 100, trilloPattern: 0,
     latchedNote: false, articulationDegreeTranspose: 0, presetBpm: 120, oscBank: 0,
+    // Web sequencer (the arp button in seq mode): steps, step length
+    // (sequencer DIVISIONS, 3 = 1/16), swing %, live record adds or replaces.
+    seqMode: false, seqLength: 16, seqDivision: 3, seqSwing: 0, seqOverdub: true,
   };
 }
 
@@ -129,6 +133,9 @@ export class Controller {
     this.midiHeld = new Map();
     this.midiOrder = 1;
     this.midiArp = { active: false, sequence: new Sequence(0x5bd1e995), next: null, step: 0, gateOff: 0, playing: false };
+
+    this.seq = new Sequencer(this);
+    this.seqSent = 0; // pattern version last sent to the panel
   }
 
   // ---- Pitch ------------------------------------------------------------
@@ -168,7 +175,7 @@ export class Controller {
 
   renderVoice(i) {
     const v = this.v[i];
-    if (v.owner !== OWNER_KEYBOARD || v.key >= KEYS) return;
+    if ((v.owner !== OWNER_KEYBOARD && v.owner !== OWNER_SEQ) || v.key >= KEYS) return;
     let f = clamp(this.baseFrequency(v.key, v.degree) * OCTAVES[v.octave], MIN_FREQ, MAX_FREQ);
     if (v.bendTo < KEYS && v.bendPos > 0) {
       // Touch bend: geometric interpolation towards the neighbour pad.
@@ -184,7 +191,7 @@ export class Controller {
   refreshVoices() {
     for (let i = 0; i < VOICES; i++) {
       const v = this.v[i];
-      if (!v.gate || v.owner !== OWNER_KEYBOARD || v.key >= KEYS || v.holdKey < KEYS) continue;
+      if (!v.gate || (v.owner !== OWNER_KEYBOARD && v.owner !== OWNER_SEQ) || v.key >= KEYS || v.holdKey < KEYS) continue;
       v.degree = this.currentDegreeTranspose();
       v.octave = this.currentOctaveIndex();
       v.transpose = this.pr.scaleRoot;
@@ -207,7 +214,17 @@ export class Controller {
       const i = (this.stealIdx + n) % VOICES;
       if (this.silent(i)) chosen = i;
     }
+    // Web: sequencer notes are stolen first, and the sequencer takes only
+    // released voices or its own (what is played over it always sounds).
+    for (let n = 0; n < VOICES && chosen < 0 && owner === OWNER_SEQ; n++) {
+      const i = (this.stealIdx + n) % VOICES;
+      if (!this.v[i].gate) chosen = i;
+    }
     for (let n = 0; n < VOICES && chosen < 0; n++) {
+      const i = (this.stealIdx + n) % VOICES;
+      if (this.v[i].owner === OWNER_SEQ) chosen = i;
+    }
+    for (let n = 0; n < VOICES && chosen < 0 && owner !== OWNER_SEQ; n++) {
       const i = (this.stealIdx + n) % VOICES;
       if (this.v[i].holdKey >= KEYS) chosen = i;
     }
@@ -247,6 +264,7 @@ export class Controller {
     }
     this.keyDown[key] = 1;
     this.keyAftertouch[key] = pressure;
+    this.seq.keyOn(key, pressure);
     // While paused by Hold, a new key clears the stack and resumes.
     if (this.pr.trilloOn && this.arpPaused) { this.keyStack = []; this.arpPaused = false; this.pr.latchedNote = true; }
     this.keyStack = this.keyStack.filter((k) => k !== key);
@@ -265,6 +283,7 @@ export class Controller {
   keyOff(key) {
     if (key < 0 || key >= KEYS || !this.keyDown[key]) return;
     this.keyDown[key] = 0;
+    this.seq.keyOff(key);
     if (this.pr.latchedNote) {
       const touchedAt = this.retouchAt && this.retouchAt.get(key);
       if (touchedAt !== undefined) {
@@ -396,6 +415,21 @@ export class Controller {
     if (trigger) v.trig = true;
     this.lastVoice = i;
     this.renderVoice(i);
+  }
+
+  // ---- Web sequencer voices ---------------------------------------------------
+
+  seqVoiceOn(key, pressure) {
+    const i = this.claimVoice(OWNER_SEQ);
+    if (i < 0) return;
+    Object.assign(this.v[i], { key, transpose: this.pr.scaleRoot, degree: this.currentDegreeTranspose(),
+      octave: this.currentOctaveIndex(), bendTo: 255, bendPos: 0, aft: pressure, gate: true, trig: true });
+    this.lastVoice = i;
+    this.renderVoice(i);
+  }
+
+  seqVoiceOff(key) {
+    for (const v of this.v) if (v.owner === OWNER_SEQ && v.key === key) v.gate = false;
   }
 
   // ---- Hold (❄): tap latches, hold >= 300 ms captures momentarily -------
@@ -732,6 +766,7 @@ export class Controller {
     while (this.attacks.length && this.timeMs - this.attacks[0] > 16000) this.attacks.shift();
     this.arpeggio();
     this.midiArpeggio();
+    this.seq.tick();
     this.refreshVoices();
   }
 
@@ -741,12 +776,19 @@ export class Controller {
     return 440 * Math.pow(2, (v.note - 69 + (v.cents - 50) / 100) / 12);
   }
 
+  // The sequencer for the panel, with the steps when they changed.
+  seqStatus() {
+    const fresh = this.seqSent !== this.seq.version;
+    this.seqSent = this.seq.version;
+    return this.seq.status(fresh);
+  }
+
   // Snapshot for the panel: LEDs and display.
   status() {
     return {
       keys: Array.from(this.keyDown),
       stack: this.keyStack.slice(),
-      voices: this.v.map((v, i) => ({ key: v.owner === OWNER_KEYBOARD ? v.key : 255, gate: v.gate, env: this.adsr[i], note: v.note })),
+      voices: this.v.map((v, i) => ({ key: v.owner === OWNER_MIDI ? 255 : v.key, gate: v.gate, env: this.adsr[i], note: v.note })),
       latched: this.pr.latchedNote,
       captured: [...this.momentaryHold],
       midiCaptured: [...this.midiHeld.values()].some((h) => h.captured),
@@ -757,6 +799,7 @@ export class Controller {
       bpm: this.bpm,
       clockPhase: this.clockPhase(),
       lfoOutput: this.lfoOutput,
+      seq: this.seqStatus(),
     };
   }
 }
