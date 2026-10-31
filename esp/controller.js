@@ -44,6 +44,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 export function defaultPreset() {
   return {
     selKeyboard: 0, keyboardLayout: 0, scaleRoot: 0, octaveIndex: 3,
+    keyboardBase: 3, // web: the pads start at C3 (presets without it: C4)
     attack: 0, release: 0, wave_shape: 0, spectralStereo: 0, oscSubBlend: 32767.5,
     subWave: 0, crossMod: 0, subDetuneCents: 0, subOctave: 1,
     spectralRotate: 32767.5, spectralWidth: 63.75, spectralBands: 255, spectralSpread: 128,
@@ -76,7 +77,14 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
-  return withLfoDepth(migrateReverb(pr));
+  return withLfoDepth(withKeyboardBase(migrateReverb(pr)));
+}
+
+// Presets made when the pads started at C4: an octave up, so they sound the
+// same (the panel also halves their per-key frequencies, see applyPreset).
+export function withKeyboardBase(pr) {
+  if (pr.keyboardBase === 3) return pr;
+  return { ...pr, keyboardBase: 3, octaveIndex: clamp((pr.octaveIndex ?? 3) + 1, 0, 6) };
 }
 
 // Presets before per-destination depths: every assigned control the full

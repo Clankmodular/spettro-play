@@ -30,7 +30,9 @@ export const SCALES = [
 
 export const LAYOUT_STEPS = [0, 2, 3, 4, 5, 7];
 export const LAYOUT_NAMES = ['linear', '+2', '+3', '+4', '+5', '+7'];
-export const REFERENCE = 261.6255653; // C4, A4 = 440 Hz.
+// Web: C3 (the firmware: C4), so that the octave buttons reach C1 (asked by
+// the user); presets made before are raised an octave (migratePreset).
+export const REFERENCE = 130.8127827; // C3, A4 = 440 Hz.
 
 // The Spettro panel has 24 pads in three rows of eight.
 export const COLUMNS = 8, ROWS = 3, KEYS = COLUMNS * ROWS;

@@ -950,7 +950,10 @@ export class Ui {
     this.adc.tune = data.tune ?? this.adc.tune;
     this.sendAdc();
     if (data.bpm) this.setBpm(data.bpm);
-    this.customFreq = data.customFreq || null;
+    // Per-key frequencies are absolute: a preset raised an octave by
+    // withKeyboardBase gets them halved, or they would sound an octave up.
+    const fromC4 = data.pr?.keyboardBase !== 3;
+    this.customFreq = data.customFreq ? data.customFreq.map((f) => (fromC4 ? f / 2 : f)) : null;
     if (this.customFreq) this.call('setKeyboardFrequencies', this.customFreq);
     this.loopLoad(data.loop);
     this.presetName = data.name || '';
@@ -1171,11 +1174,16 @@ export class Ui {
     const pr = this.pr, key = this.lastKey, f = this.keyFrequencies()[key];
     const scale = SCALES[pr.selKeyboard];
     const degree = nearestDegree(pr.selKeyboard, f);
-    const midi = 69 + 12 * Math.log2(f / 440);
+    // What the pad sounds now (web, asked by the user): with the transpose
+    // (scale degrees, as Controller.baseFrequency), the octave and the root.
+    const tr = pr.articulationDegreeTranspose;
+    const shifted = tr ? frequency(pr.selKeyboard, degree + tr) * (f / frequency(pr.selKeyboard, degree)) : f;
+    const sounding = shifted * Math.pow(2, pr.octaveIndex - 3 + pr.scaleRoot / 12);
+    const midi = 69 + 12 * Math.log2(sounding / 440);
     const n = Math.round(midi), cents = Math.round((midi - n) * 100);
     return P.drawNotePage(ctx, Object.assign(this.menus.note, {
-      key, scale: scale.name, note: `${NOTE_NAMES[((n + pr.scaleRoot) % 12 + 12) % 12]}${Math.floor((n + pr.scaleRoot) / 12) - 1}`,
-      root: NOTE_NAMES[pr.scaleRoot], freqLabel: 'cents', freq: `${cents >= 0 ? '+' : ''}${cents} ct  ${f.toFixed(1)}`,
+      key, scale: scale.name, note: `${NOTE_NAMES[(n % 12 + 12) % 12]}${Math.floor(n / 12) - 1}`,
+      root: NOTE_NAMES[pr.scaleRoot], freqLabel: 'cents', freq: `${cents >= 0 ? '+' : ''}${cents} ct  ${sounding.toFixed(1)}`,
       layout: LAYOUT_NAMES[pr.keyboardLayout], voices: this.state.status.voices, degree,
     }), (row, step, fine) => this.edit('note', row, step, fine));
   }
