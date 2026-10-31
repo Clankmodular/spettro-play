@@ -445,8 +445,9 @@ export class Controller {
   // ---- Web: arpeggio rules per pad (as the OXI One MKII's conditions and
   // accumulator). play [x, y]: the pad sounds on cycle x of every y (a cycle
   // is one pass of the pattern). acc: scale degrees added each time it
-  // plays, limit: how far, mode: clip (back to 0 past the limit), wrap (on
-  // around 0..limit, keeping the remainder), pendulum (back and forth).
+  // plays, limit: how far, mode: clip (back to 0 past the limit), wrap (past
+  // +limit on from -limit, and the other way round: it keeps going round
+  // -limit..+limit), pendulum (back and forth between 0 and the limit).
 
   arpRulesReset() { this.arpCycle = 0; this.arpAcc = new Map(); }
 
@@ -461,8 +462,14 @@ export class Controller {
     const st = this.arpAcc.get(key) || { v: 0, dir: 1 };
     const out = st.v, s = Math.abs(step), sign = Math.sign(step);
     let a = Math.abs(st.v);
-    if (rule.mode === 'wrap') a = (a + s) % (limit + 1);
-    else if (rule.mode === 'pendulum') {
+    if (rule.mode === 'wrap') {
+      const span = 2 * limit + 1;
+      let w = st.v + step;
+      if (w > limit) w -= span; else if (w < -limit) w += span;
+      st.v = w;
+      this.arpAcc.set(key, st);
+      return out;
+    } else if (rule.mode === 'pendulum') {
       // Turns back where the next step would leave 0..limit.
       if (a + st.dir * s > limit || a + st.dir * s < 0) st.dir = -st.dir;
       a = clamp(a + st.dir * s, 0, limit);

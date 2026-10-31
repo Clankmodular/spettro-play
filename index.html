@@ -87,7 +87,7 @@
             With the arpeggio latched by Hold, hold one of its pads: that note's page. <b>play</b> — on which cycles it sounds
             (1:1 every pass of the pattern, 1:2 the first of every two, 2:2 the second…); <b>acc</b> — scale degrees it moves
             each time it plays (− down), <b>limit</b> — how far, <b>mode</b> — <b>clip</b> back to the start past the limit,
-            <b>wrap</b> around keeping the remainder, <b>pendulum</b> back and forth. Saved with the preset.
+            <b>wrap</b> past +limit on from −limit (it keeps going round), <b>pendulum</b> back and forth. Saved with the preset.
             With the arpeggio on, Hold pauses and restarts it: switched off, the arpeggio stops and keeps its notes (arp LED blinking); Hold on again restarts them, a new note starts a new arpeggio without Hold.</li>
           <li><b>clock</b> — tap it in time to set the tempo; long press: the tempo page. The LED blinks on the beat.</li>
         </ul>
@@ -103,8 +103,9 @@
             hold notes (❄ or a drone) to keep the effect open.</li>
           <li><b>A fader:</b> the sub oscillator's wave. <b>1/2/4</b>: sub divider (one, two or four octaves down); long press: sub detune.</li>
           <li><b>blend</b> mixes main and sub; <b>xmod</b> sends the main oscillator (or the External input) through a Serge Triple Waveshaper stage with the sub
-            on its VC1: the first quarter fades the waveshaper in (a sawtooth turns almost sine, a sine an octave up, a square nearly
-            vanishes, as on the module), further up the drive grows and the sub bends the shape at its own pitch.</li>
+            on its VC1: the first quarter fades the waveshaper in, warm (only its soft clip); further up the drive grows, the
+            input moves onto the fold (a sawtooth turns rounder, a sine climbs an octave) and the sub bends the shape at its own pitch.
+            The volume stays about the same.</li>
         </ul>
       </section>
 
