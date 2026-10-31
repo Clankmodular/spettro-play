@@ -117,7 +117,10 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   geometry() {
     const c = this.controller, pr = c.pr;
     const mod = (base, d) => Math.min(255, Math.max(0, base + c.lfo(d) + c.cc(d))) / 255;
-    const ptr = this.e.spectrum_geometry(mod(pr.spectralBands, 37), mod(pr.spectralSpread, 39),
+    // Bands bipolar: the count is the lower half (the lowest cut above the
+    // middle is not drawn).
+    const bands = Math.min(1, Math.max(0, pr.spectralBands + c.lfo(37) + c.cc(37)) / 128);
+    const ptr = this.e.spectrum_geometry(bands, mod(pr.spectralSpread, 39),
       mod(pr.spectralWidth, 40), pr.spectralRotate / 65535, IMAGE / 65535, pr.spectralMode,
       c.displayNoteHz() * Math.pow(2, (this.tuneCents || 0) / 1200));
     return new Float32Array(this.mem.buffer, ptr, 33).slice();

@@ -149,7 +149,7 @@ export class Ui {
   }
 
   syncPanel() {
-    this.panel.defaults = { ...this.positions(), shift: 0.5, blend: 0.5, fx: 0.5, tune: 0.5, transpose: 0.5 };
+    this.panel.defaults = { ...this.positions(), shift: 0.5, blend: 0.5, fx: 0.5, tune: 0.5, transpose: 0.5, bands: 128 / 255 };
     for (const [id, v] of Object.entries(this.positions())) this.panel.set(id, v);
   }
 
@@ -1035,15 +1035,18 @@ export class Ui {
     const { status, reply } = this.state, pr = this.pr, p = this.panel, t = now();
     const blink = (ms) => (t % ms) < ms / 2;
 
-    // Bands: steady yellow for the number of filters; while notes sound, the
-    // filters take the filter-mode colour and follow their own envelopes.
-    // Assigned to the LFO: the count with the LFO offset added, white.
+    // Bands: steady yellow for the bands in use (bipolar: from the bottom up
+    // to the middle of the control, then the lowest fade out); while notes
+    // sound, the filters take the filter-mode colour and follow their own
+    // envelopes. Assigned to the LFO: with the LFO offset added, white.
     const bandsLfo = (pr.lfoAssigned[DEST.Bands >> 3] & (1 << (DEST.Bands & 7))) !== 0;
-    const amount = 1 + clamp(pr.spectralBands / 255 + (bandsLfo ? this.lfoOffset(DEST.Bands) : 0), 0, 1) * 7;
+    const bandsByte = clamp(Math.round(pr.spectralBands + (bandsLfo ? this.lfoOffset(DEST.Bands) * 255 : 0)), 0, 255);
+    const amount = 1 + Math.min(1, bandsByte / 128) * 7;
+    const lowCut = bandsByte > 128 ? (bandsByte - 128) / 127 * 7 : 0;
     const levels = this.state.bandLevels || [];
     const sounding = levels.some((l) => l > 0.01);
     for (let i = 0; i < 8; i++) {
-      const present = i === 0 ? 1 : clamp(amount - i, 0, 1);
+      const present = (i === 0 ? 1 : clamp(amount - i, 0, 1)) * clamp(i + 1 - lowCut, 0, 1);
       if (!present) p.light(`band${i}`, null);
       else if (sounding) p.light(`band${i}`, levels[i] > 0.01 ? MODE_COLORS[pr.spectralMode] : null, Math.min(1, levels[i]) * present);
       else p.light(`band${i}`, bandsLfo ? LED.white : LED.yellow, present);

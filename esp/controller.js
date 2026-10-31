@@ -47,7 +47,10 @@ export function defaultPreset() {
     keyboardBase: 3, // web: the pads start at C3 (presets without it: C4)
     attack: 0, release: 0, wave_shape: 0, spectralStereo: 0, oscSubBlend: 32767.5,
     subWave: 0, crossMod: 0, subDetuneCents: 0, subOctave: 1,
-    spectralRotate: 32767.5, spectralWidth: 63.75, spectralBands: 255, spectralSpread: 128,
+    spectralRotate: 32767.5, spectralWidth: 63.75, spectralBands: 128, spectralSpread: 128,
+    // Web: bands bipolar (byte 32): 0..128 one to eight bands from the bottom,
+    // 128 all, above it the lowest fade out down to the top band alone.
+    bandsBipolar: true,
     spectralMode: 0, delayTime: 0, delayRegen: 0, delayShift: 0, delayReverse: 0,
     // Web: the freeze slots carry reverb size (255 = the firmware hall),
     // reverb detail (reverbFuse: 0 = one loop per band, 255 = the firmware
@@ -77,7 +80,18 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
-  return withLfoDepth(withKeyboardBase(migrateReverb(pr)));
+  return withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr))));
+}
+
+// Presets before the bipolar bands: their count goes in the lower half (255
+// all eight -> 128) and an LFO on the bands moves as far, but no further
+// than all the bands (it stopped there before; now it would cut the lowest).
+export function withBipolarBands(pr) {
+  if (pr.bandsBipolar) return pr;
+  const k = 128 / 255, bands = (pr.spectralBands ?? 255) * k;
+  const lfoDepth = Array.isArray(pr.lfoDepth) ? pr.lfoDepth.slice() : pr.lfoDepth;
+  if (Array.isArray(lfoDepth)) lfoDepth[DEST.Bands] = Math.round(Math.min((lfoDepth[DEST.Bands] || 0) * k, 128 - bands));
+  return { ...pr, bandsBipolar: true, spectralBands: bands, ...(lfoDepth ? { lfoDepth } : {}) };
 }
 
 // Presets made when the pads started at C4: an octave up, so they sound the
