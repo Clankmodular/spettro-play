@@ -124,7 +124,7 @@ export class Controller {
     // Voices, as the polyV* arrays of the firmware.
     this.v = Array.from({ length: VOICES }, () => ({
       key: 255, note: 60, cents: 50, aft: 0, gate: false, trig: false, owner: OWNER_KEYBOARD,
-      transpose: 0, degree: 0, octave: 3, holdKey: 255, midiNote: -1, midiChannel: -1,
+      transpose: 0, degree: 0, octave: 3, holdKey: 255, midiNote: -1, midiChannel: -1, looped: false,
       bendTo: 255, bendPos: 0,
     }));
     this.gen = new Uint8Array(VOICES);
@@ -254,7 +254,37 @@ export class Controller {
       const v = this.v[i];
       if (v.owner === OWNER_KEYBOARD && !v.gate && v.key === key && this.adsr[i] > ENV_ACTIVE) return i;
     }
-    return this.claimVoice(OWNER_KEYBOARD);
+    return this.noteLoopPlaying ? this.claimLoopAwareVoice(!!this.noteLooping) : this.claimVoice(OWNER_KEYBOARD);
+  }
+
+  // Web: with a note cycle of the looper playing, its notes come first. A
+  // played note takes a free voice, then one releasing, then one of its own
+  // played notes, never a sounding note of the cycle (it stays silent when
+  // they hold every voice); the cycle takes its own oldest first, then the
+  // played notes. Round robin within each step, as claimVoice.
+  claimLoopAwareVoice(looped) {
+    const free = (i) => this.v[i].holdKey >= KEYS;
+    const steps = [
+      (i) => this.silent(i),
+      (i) => !this.v[i].gate && free(i),
+      (i) => this.v[i].gate && free(i) && this.v[i].looped === looped,
+      ...(looped ? [(i) => this.v[i].gate && free(i)] : []),
+    ];
+    let chosen = -1;
+    for (const ok of steps) {
+      for (let n = 0; n < VOICES && chosen < 0; n++) {
+        const i = (this.stealIdx + n) % VOICES;
+        if (ok(i)) chosen = i;
+      }
+      if (chosen >= 0) break;
+    }
+    if (chosen < 0) return -1;
+    this.stealIdx = (chosen + 1) % VOICES;
+    const v = this.v[chosen];
+    if (v.owner !== OWNER_KEYBOARD) { v.midiNote = -1; v.key = 255; }
+    v.owner = OWNER_KEYBOARD;
+    v.holdKey = 255;
+    return chosen;
   }
 
   // ---- Keyboard ---------------------------------------------------------
@@ -419,6 +449,7 @@ export class Controller {
     v.bendTo = 255; v.bendPos = 0;
     v.aft = pressure ?? this.keyAftertouch[key];
     v.gate = true;
+    v.looped = !!this.noteLooping;
     if (trigger) v.trig = true;
     this.lastVoice = i;
     this.renderVoice(i);
@@ -650,7 +681,7 @@ export class Controller {
 
   setNoteLoop(loop, align = false) {
     this.noteLoopRelease();
-    if (!loop || !(loop.length > 0)) { this.noteLoop = null; return; }
+    if (!loop || !(loop.length > 0)) { this.noteLoop = null; this.noteLoopPlaying = false; return; }
     const rate = loop.rate || 1;
     const len = loop.length, intoBeat = (this.timeMs - this.clockStart) % this.clockTimeMs;
     const origin = align ? this.timeMs + (intoBeat ? this.clockTimeMs - intoBeat : 0) : this.timeMs - (loop.phase || 0) / rate;
@@ -658,6 +689,7 @@ export class Controller {
     // position of each tick fire (from the top: the one at 0 too).
     const last = align ? -1 : (((loop.phase || 0) - 1e-6) % len + len) % len;
     this.noteLoop = { points: loop.points, length: len, rate, origin, last, on: new Set() };
+    this.noteLoopPlaying = true;
   }
 
   noteLoopRelease() {
@@ -674,8 +706,10 @@ export class Controller {
     const fire = (from, to) => {
       for (const [at, key, p] of n.points) {
         if (at <= from || at > to) continue;
+        this.noteLooping = true;
         if (p) { if (n.on.has(key)) this.keyOff(key); this.keyOn(key, p); n.on.add(key); }
         else if (n.on.delete(key)) this.keyOff(key);
+        this.noteLooping = false;
       }
     };
     if (pos >= n.last) fire(n.last, pos);
