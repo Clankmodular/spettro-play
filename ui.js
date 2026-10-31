@@ -271,6 +271,14 @@ export class Ui {
     if (down) { b.down = true; b.at = t; b.consumed = false; b.encoderMoved = false; }
     const held = t - (b.at || t);
     if (!down) b.down = false;
+    // Web: tempo, keyboard and preset held together open System; none of
+    // the three then does its own thing.
+    const COMBO = ['clock', 'system', 'preset'];
+    if (down && COMBO.includes(id) && COMBO.every((k) => this.buttons[k]?.down)) {
+      for (const k of COMBO) { clearTimeout(this.buttons[k].timer); this.buttons[k].consumed = true; }
+      this.openPage('system'); this.systemPage = 'system';
+      return;
+    }
     // The envelope and arp menus close on any other button, which then acts as usual.
     const owner = { envelope: 'envelope', arp: 'arp', loops: 'loop' }[this.page];
     if (owner && down && id !== owner) this.openPage('analyser');
@@ -344,8 +352,9 @@ export class Ui {
       case 'envelope':
         if (!down) return;
         return this.openPage(this.page === 'envelope' ? 'analyser' : 'envelope');
+      // Web: on release, so it can be part of the System combination.
       case 'preset':
-        if (!down) return;
+        if (down || b.consumed) return;
         if (this.page === 'preset' && t - (b.lastTap || 0) < 360 && this.presetSnapshot) {
           this.applyPreset(this.presetSnapshot); this.display.show('panel', 900);
         } else this.openPage(this.page === 'preset' ? 'analyser' : 'preset');
@@ -357,9 +366,9 @@ export class Ui {
         if (!b.consumed) this.tapTempo(t);
         return;
       case 'system':
-        // Former Keyboard button: tap cycles pages, hold 2 s opens System.
-        if (down) { b.timer = setTimeout(() => { b.consumed = true; this.openPage('system'); this.systemPage = 'system'; }, 2000); return; }
-        clearTimeout(b.timer);
+        // Former Keyboard button: a tap cycles the pages (System: tempo,
+        // keyboard and preset together).
+        if (down) return;
         if (!b.consumed) this.keyboardShortPress();
     }
   }
@@ -1045,7 +1054,7 @@ export class Ui {
       const on = droning ? i <= this.stutterStep : tr > 0 ? i < tr : tr < 0 && i >= 12 + tr;
       p.light(`transpose${i}`, on ? (droning ? LED.violet : tr > 0 ? LED.yellow : LED.red) : null);
     }
-    p.light('preset', this.page === 'preset' || this.presetName ? (this.presetDirty && this.presetName ? LED.red : LED.turquoise) : null);
+    p.light('preset', this.page === 'preset' || this.presetName ? (this.presetDirty && this.presetName ? LED.red : LED.yellow) : null);
     // Clock: yellow flash on the beat, steady while the BPM page is open.
     p.light('clock', this.page === 'bpm' || status.clockPhase < 40 ? LED.yellow : null);
     p.light('system', this.page === 'system' || this.page === 'note' ? LED.yellow : null);
