@@ -25,9 +25,10 @@ export const DEST = {
   Crossmod: 41, Feedback: 42, Dispersion: 43, Master: 45, SubDetune: 47, SubDivider: 48,
   FilterMode: 49, LfoWave: 50, Octave: 52, Transpose: 53, Tune: 54,
 };
-// Web: image (band stereo width) is fixed at half; its fader now carries
-// drive, so it is not modulated either.
-export const IMAGE = 32767.5;
+// Web: image (band stereo width) is fixed; its fader now carries drive, so
+// it is not modulated either. 75 % (was half: narrower than most old presets,
+// which averaged about 65 %; asked by the user).
+export const IMAGE = 49151.25;
 
 // Web drone stutter: the transpose fader in 12 zones from the bottom, the
 // first the plain drone, then repeats from slow to fast (length in beats).
@@ -51,7 +52,7 @@ export function defaultPreset() {
     // Web: bands bipolar (byte 32): 0..128 one to eight bands from the bottom,
     // 128 all, above it the lowest fade out down to the top band alone.
     bandsBipolar: true,
-    spectralMode: 0, delayTime: 0, delayRegen: 0, delayShift: 0, delayReverse: 0,
+    spectralMode: 1, delayTime: 0, delayRegen: 0, delayShift: 0, delayReverse: 0, // web: starts in harmonic
     // Web: the freeze slots carry reverb size (255 = the firmware hall),
     // reverb detail (reverbFuse: 0 = one loop per band, 255 = the firmware
     // tank) and
