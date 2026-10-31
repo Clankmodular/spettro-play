@@ -62,7 +62,9 @@ export function defaultPreset() {
     latchedNote: false, articulationDegreeTranspose: 0, presetBpm: 120, oscBank: 0,
     // Web sequencer (the arp button in seq mode): steps, step length
     // (sequencer DIVISIONS, 3 = 1/16), swing %, live record adds or replaces.
-    seqMode: false, seqLength: 16, seqDivision: 3, seqSwing: 0, seqOverdub: true,
+    // seqOctave: the sequence's octave (3 = as recorded), apart from the keyboard's.
+    seqMode: false, seqLength: 16, seqDivision: 3, seqSwing: 0, seqOverdub: true, seqOctave: 3,
+    seqDirection: 0, // sequencer DIRECTIONS: forward, backward, pendulum, random
   };
 }
 
@@ -193,7 +195,7 @@ export class Controller {
       const v = this.v[i];
       if (!v.gate || (v.owner !== OWNER_KEYBOARD && v.owner !== OWNER_SEQ) || v.key >= KEYS || v.holdKey < KEYS) continue;
       v.degree = this.currentDegreeTranspose();
-      v.octave = this.currentOctaveIndex();
+      v.octave = v.owner === OWNER_SEQ ? this.seqOctaveIndex(v.seqOct) : this.currentOctaveIndex();
       v.transpose = this.pr.scaleRoot;
       this.renderVoice(i);
     }
@@ -419,11 +421,17 @@ export class Controller {
 
   // ---- Web sequencer voices ---------------------------------------------------
 
-  seqVoiceOn(key, pressure) {
+  // Its own octave: the step's (as recorded) moved by pr.seqOctave (3 = as
+  // recorded), with the LFO on octave; the keyboard octave does not move it.
+  seqOctaveIndex(oct = 3) {
+    return clamp(oct + this.pr.seqOctave - 3 + Math.round(this.lfo(DEST.Octave) * 6 / 255), 0, 6);
+  }
+
+  seqVoiceOn(key, pressure, oct) {
     const i = this.claimVoice(OWNER_SEQ);
     if (i < 0) return;
-    Object.assign(this.v[i], { key, transpose: this.pr.scaleRoot, degree: this.currentDegreeTranspose(),
-      octave: this.currentOctaveIndex(), bendTo: 255, bendPos: 0, aft: pressure, gate: true, trig: true });
+    Object.assign(this.v[i], { key, seqOct: oct, transpose: this.pr.scaleRoot, degree: this.currentDegreeTranspose(),
+      octave: this.seqOctaveIndex(oct), bendTo: 255, bendPos: 0, aft: pressure, gate: true, trig: true });
     this.lastVoice = i;
     this.renderVoice(i);
   }
@@ -442,15 +450,18 @@ export class Controller {
     // Web-only (the firmware captures keyboard keys only): MIDI notes held
     // at the press are captured too, until Hold is released.
     for (const h of this.midiHeld.values()) if (h.keyDown) h.captured = true;
+    // Web sequencer playing under the keyboard: its notes are captured too.
+    this.seq.capture(true);
   }
 
   // Web drone: notes captured by a held Hold (keyboard or MIDI).
   capturedVoice(v) {
+    if (v.owner === OWNER_SEQ) return v.gate && this.seq.captured;
     return v.gate && (v.owner === OWNER_KEYBOARD ? v.holdKey < KEYS : !!this.midiHeld.get(v.midiNote)?.captured);
   }
 
   droneActive() {
-    if (this.momentaryHold.size) return true;
+    if (this.momentaryHold.size || this.seq.captured) return true;
     for (const h of this.midiHeld.values()) if (h.captured) return true;
     return false;
   }
@@ -463,6 +474,7 @@ export class Controller {
     // Captured MIDI notes no longer pressed end with the latch below: released
     // by a long press, kept if a tap switches the latch on.
     for (const h of this.midiHeld.values()) h.captured = false;
+    this.seq.capture(false);
     if (long) {
       this.setLatch(false);
       for (const k of captured) if (!this.keyDown[k]) this.releaseKey(k);
@@ -791,7 +803,7 @@ export class Controller {
       voices: this.v.map((v, i) => ({ key: v.owner === OWNER_MIDI ? 255 : v.key, gate: v.gate, env: this.adsr[i], note: v.note })),
       latched: this.pr.latchedNote,
       captured: [...this.momentaryHold],
-      midiCaptured: [...this.midiHeld.values()].some((h) => h.captured),
+      midiCaptured: [...this.midiHeld.values()].some((h) => h.captured) || this.seq.captured,
       trilloOn: this.pr.trilloOn,
       arpKey: this.arpKey,
       arpPaused: !!this.arpPaused,

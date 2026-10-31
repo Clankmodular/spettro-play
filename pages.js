@@ -51,10 +51,10 @@ function card(ctx, x, y, w, h, label, value, state = 'idle', valueSize = 3, with
 
 // Rows of a list page. Item: [label, value, { step, click }]. Three tall
 // cards as on the instrument, or compact rows when the list is longer
-// (narrower still for six).
+// (narrower still for six or seven).
 function rows(ctx, menu, items) {
-  const compact = items.length > 3;
-  const top = compact ? 52 : 54, h = items.length > 5 ? 27 : compact ? 33 : 54, gap = compact ? 3 : 6;
+  const compact = items.length > 3, n = items.length;
+  const top = compact ? 52 : 54, h = n > 6 ? 24 : n > 5 ? 27 : compact ? 33 : 54, gap = n > 6 ? 2 : compact ? 3 : 6;
   return items.map(([label, value, act = {}], i) => {
     const y = top + i * (h + gap);
     card(ctx, 12, y, 216, h, label, value, menu.row === i ? 'focus' : 'idle', 3, !!act.step);
@@ -140,6 +140,24 @@ export function drawPresetPage(ctx, m, act) {
   }
   drawText(ctx, m.hint, 120, 228, 1, COLOR.secondary, 'center');
   return regions;
+}
+
+// Sequencer recording, over the top of any page: the mode, where it is
+// (step / length, or the beats left of the count-in) and a row of the steps
+// (with notes lighter, the playing or written one in red).
+export function drawSeqRecord(ctx, m) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 240, 60);
+  drawText(ctx, m.title, 12, 10, 2, COLOR.popup);
+  drawText(ctx, m.right, 228, 10, 2, COLOR.normal, 'right');
+  const len = m.steps.length, gap = len > 16 ? 1 : 2;
+  const w = Math.floor((216 - gap * (len - 1)) / len), x0 = 12 + Math.floor((216 - (w * len + gap * (len - 1))) / 2);
+  m.steps.forEach((full, i) => {
+    ctx.fillStyle = i === m.at ? COLOR.popup : full ? COLOR.secondary : COLOR.track;
+    ctx.fillRect(x0 + i * (w + gap), i % 4 ? 36 : 32, w, i % 4 ? 14 : 18); // beat starts taller
+  });
+  ctx.fillStyle = COLOR.rule;
+  ctx.fillRect(0, 59, 240, 1);
 }
 
 // Sub detune: +-100 cent slider, dragged or clicked.

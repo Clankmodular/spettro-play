@@ -9,7 +9,7 @@ import { PATTERNS, GROOVES, DIVISIONS, divisionIndex, speedForDivision } from '.
 import * as P from './pages.js';
 import { MODES, BANKS } from './display.js';
 import { Presets, SLOTS } from './presets.js';
-import { DIVISIONS as SEQ_DIVISIONS, STEPS, cleanSteps } from './esp/sequencer.js';
+import { DIVISIONS as SEQ_DIVISIONS, DIRECTIONS as SEQ_DIRECTIONS, STEPS, cleanSteps } from './esp/sequencer.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -244,13 +244,17 @@ export class Ui {
       // Tap: change octave (the lit one again: back to 0). Held 300 ms or
       // more (web only): momentary, the release restores the previous octave
       // unless another octave button has changed it meanwhile.
+      // Web sequencer: in the step view they set the sequence's own octave
+      // (seqOctave); on the keyboard the keyboard's, which leaves it alone.
       case 'octDown2': case 'octDown1': case 'octUp1': case 'octUp2': {
+        if (down) b.field = this.stepView() ? 'seqOctave' : 'octaveIndex';
+        const field = b.field || 'octaveIndex';
         if (down) {
           const index = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 }[id];
-          b.previous = this.pr.octaveIndex;
-          b.octave = this.pr.octaveIndex === index ? 3 : index;
-          this.set({ octaveIndex: b.octave });
-        } else if (!b.consumed && held >= 300 && this.pr.octaveIndex === b.octave) this.set({ octaveIndex: b.previous });
+          b.previous = this.pr[field];
+          b.octave = this.pr[field] === index ? 3 : index;
+          this.set({ [field]: b.octave });
+        } else if (!b.consumed && held >= 300 && this.pr[field] === b.octave) this.set({ [field]: b.previous });
         return;
       }
       case 'hold':
@@ -461,8 +465,9 @@ export class Ui {
       if (pr.seqMode) {
         if (row === 1) this.set({ seqLength: clamp(pr.seqLength + step, 1, STEPS) });
         if (row === 2) this.set({ seqDivision: clamp(pr.seqDivision + step, 0, SEQ_DIVISIONS.length - 1) });
-        if (row === 3) this.set({ seqSwing: clamp(pr.seqSwing + step, 0, 100) });
-        if (row === 4) this.set({ seqOverdub: !pr.seqOverdub });
+        if (row === 3) this.set({ seqDirection: (pr.seqDirection + step + SEQ_DIRECTIONS.length) % SEQ_DIRECTIONS.length });
+        if (row === 4) this.set({ seqSwing: clamp(pr.seqSwing + step, 0, 100) });
+        if (row === 5) this.set({ seqOverdub: !pr.seqOverdub });
         return;
       }
       row--;
@@ -994,18 +999,19 @@ export class Ui {
     p.light('clock', this.page === 'bpm' || status.clockPhase < 40 ? LED.yellow : null);
     p.light('system', this.page === 'system' || this.page === 'note' ? LED.yellow : null);
     const oct = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 };
-    for (const [id, index] of Object.entries(oct)) p.light(id, pr.octaveIndex === index ? LED.yellow : null, Math.abs(index - 3) === 2 ? 1 : 0.7);
-    // Sequencer: arp green (full in the step view, dim on the keyboard),
-    // Hold green while it plays in the step view, rec blinking green while it
-    // records (fast during the count-in bar).
+    // In the step view: the sequence's octave, in its green.
+    const octave = this.stepView() ? pr.seqOctave : pr.octaveIndex, octColor = this.stepView() ? LED.green : LED.yellow;
+    for (const [id, index] of Object.entries(oct)) p.light(id, octave === index ? octColor : null, Math.abs(index - 3) === 2 ? 1 : 0.7);
+    // Sequencer: arp green only in the step view, Hold green while it plays
+    // there, rec red while it records (blinking during the count-in bar).
     const seq = status.seq, seqRec = this.seqRecording();
     if (this.stepView()) p.light('hold', seq.playing ? LED.green : null);
     else p.light('hold', status.latched ? LED.red : status.captured.length || status.midiCaptured ? LED.violet : null);
-    if (pr.seqMode) p.light('arp', this.page === 'arp' ? (blink(400) ? LED.green : null) : LED.green, this.seqView === 'steps' ? 1 : 0.35);
+    if (pr.seqMode) p.light('arp', this.page === 'arp' ? (blink(400) ? LED.green : null) : this.stepView() ? LED.green : null);
     else p.light('arp', this.page === 'arp' ? (blink(400) ? LED.turquoise : null)
       : status.trilloOn ? (status.arpPaused ? (blink(500) ? LED.turquoise : null) : LED.turquoise) : null);
     const L = this.loopState();
-    if (seqRec !== 'off') p.light('loop', blink(seq.counting ? 150 : 400) ? LED.green : null);
+    if (seqRec !== 'off') p.light('loop', !seq.counting || blink(150) ? LED.red : null);
     else p.light('loop', L === 'armed' ? (blink(400) ? LED.orange : null) : L === 'recording' ? LED.red : L === 'playing' ? LED.blue : null);
 
     // Rings and bars: yellow up to the value; LFO knobs white; a control
@@ -1073,13 +1079,7 @@ export class Ui {
     const d = this.display, ctx = d.ctx, pr = this.pr, s = this.state;
     const page = this.page;
     this.regions = [];
-    // Sequencer recording: where it is, over any page (other messages first).
-    const seq = s.status.seq, rec = this.seqRecording();
-    if (rec !== 'off' && (!d.message || now() >= d.message.until || d.message.seq)) {
-      const text = rec === 'step' ? `rec step ${seq.recPos + 1}/${pr.seqLength}` : seq.counting ? 'rec: count in' : 'rec live';
-      d.message = { text, until: now() + 100, seq: true };
-    }
-    if (page === 'analyser') { d.render({ ...s, pr }); return; }
+    if (page === 'analyser') { d.render({ ...s, pr }); this.drawSeqRecord(ctx); return; }
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, 240, 240);
     const back = () => this.openPage('analyser');
@@ -1096,7 +1096,18 @@ export class Ui {
       this.regions = P.drawDetunePage(ctx, pr.subDetuneCents,
         (cents) => this.set({ subDetuneCents: clamp(Math.round(cents), -100, 100) }), back);
     }
+    this.drawSeqRecord(ctx);
     if (d.message && now() < d.message.until) d.drawMessage(d.message.text);
+  }
+
+  // While the sequencer records: how far it is, over the top of the page.
+  drawSeqRecord(ctx) {
+    const rec = this.seqRecording(), seq = this.state.status.seq, len = this.pr.seqLength;
+    if (rec === 'off') return;
+    const steps = this.seqSteps.slice(0, len).map((st) => st.keys.length > 0 && st.on);
+    if (rec === 'step') return P.drawSeqRecord(ctx, { title: 'rec step', right: `${seq.recPos + 1}/${len}`, steps, at: seq.recPos });
+    P.drawSeqRecord(ctx, { title: seq.counting ? 'count in' : 'rec live', steps,
+      right: seq.counting ? String(seq.countLeft) : `${seq.current + 1}/${len}`, at: seq.counting ? -1 : seq.current });
   }
 
   drawNote(ctx) {
@@ -1141,7 +1152,8 @@ export class Ui {
       } };
       return P.drawListPage(ctx, 'sequencer', this.menus.arp, [mode,
         ['length', `${pr.seqLength} steps`, s(1)], ['step', SEQ_DIVISIONS[pr.seqDivision][0], s(2)],
-        ['swing', `${pr.seqSwing}%`, s(3)], ['rec', pr.seqOverdub ? 'add' : 'replace', s(4)], ['clear', '', clear],
+        ['direction', SEQ_DIRECTIONS[pr.seqDirection], s(3)], ['swing', `${pr.seqSwing}%`, s(4)],
+        ['rec', pr.seqOverdub ? 'add' : 'replace', s(5)], ['clear', '', clear],
       ], this.state?.status.seq.playing ? 'play' : 'stop');
     }
     return P.drawListPage(ctx, 'arpeggio', this.menus.arp, [mode,

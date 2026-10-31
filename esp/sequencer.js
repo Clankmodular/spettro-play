@@ -12,15 +12,20 @@ export const STEPS = 24;
 const MAX_KEYS = 5;
 // Step length: name and beats.
 export const DIVISIONS = [['1/4', 1], ['1/8', 0.5], ['1/8T', 1 / 3], ['1/16', 0.25], ['1/16T', 1 / 6], ['1/32', 0.125]];
+// Play directions, as on the OXI One MKII (pr.seqDirection).
+export const DIRECTIONS = ['forward', 'backward', 'pendulum', 'random'];
+const BACKWARD = 1, PENDULUM = 2, RANDOM = 3;
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-export const emptyStep = () => ({ keys: [], on: true, tie: false, pressure: 255, gate: 50 });
+// oct: the keyboard octave (octaveIndex) the step was written at; the
+// sequence plays it moved by its own octave (pr.seqOctave), not the keyboard's.
+export const emptyStep = () => ({ keys: [], oct: 3, on: true, tie: false, pressure: 255, gate: 50 });
 
 // Steps from a preset (or nothing): always 24, values in range.
 export function cleanSteps(list) {
   return Array.from({ length: STEPS }, (_, i) => {
     const s = list?.[i] || {};
-    return { keys: (s.keys || []).filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS), on: s.on !== false,
+    return { keys: (s.keys || []).filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS), oct: clamp(Math.round(s.oct ?? 3), 0, 6), on: s.on !== false,
       tie: !!s.tie, pressure: clamp(Math.round(s.pressure ?? 255), 1, 255), gate: clamp(Math.round(s.gate ?? 50), 1, 100) };
   });
 }
@@ -32,6 +37,10 @@ export class Sequencer {
     this.version = 1;       // bumped on every pattern change, for the panel copy
     this.playing = false;
     this.pos = 0;           // next step to play
+    this.last = 0;          // the step played last
+    this.way = 1;           // pendulum: going up or down
+    this.count = 0;         // steps played since step 1, for swing and the pattern phase
+    this.rng = 0x9e3779b9;  // random direction
     this.gridAt = 0;        // its time on the grid (before swing)
     this.sounding = [];     // { key, offAt, tie }
     this.rec = 'off';       // 'off', 'step' or 'live'
@@ -41,11 +50,13 @@ export class Sequencer {
     this.held = new Map();  // live record: key -> { step, at }
     this.replaced = new Set(); // live replace: steps already cleared in this pass
     this.skip = new Map();  // step -> keys just played live, not repeated in this pass
+    this.captured = false;  // Hold held over it (keyboard view): a drone of its notes
   }
 
   length() { return clamp(Math.round(this.c.pr.seqLength), 1, STEPS); }
   stepMs() { return this.c.clockTimeMs * DIVISIONS[clamp(this.c.pr.seqDivision, 0, DIVISIONS.length - 1)][1]; }
-  // Swing delays the odd steps, up to half a step.
+  direction() { return clamp(this.c.pr.seqDirection | 0, 0, DIRECTIONS.length - 1); }
+  // Swing delays every second step played, up to half a step.
   swing(i) { return i & 1 ? this.stepMs() * clamp(this.c.pr.seqSwing, 0, 100) / 200 : 0; }
   changed() { this.version++; }
 
@@ -58,29 +69,64 @@ export class Sequencer {
     const c = this.c;
     if (!on) {
       this.playing = false;
+      this.captured = false;
       this.release();
       if (this.rec === 'live') this.stopRecord();
       return;
     }
     this.playing = true;
     this.pos %= this.length();
+    if (this.pos === this.first()) this.count = 0;
     if (quantize) this.gridAt = c.clockStart + Math.ceil((c.timeMs - c.clockStart) / c.clockTimeMs) * c.clockTimeMs;
     else {
       this.gridAt = c.timeMs;
-      if (this.pos === 0) c.alignBeat();
+      if (!this.count) c.alignBeat();
     }
   }
 
-  // Double tap on Hold, MIDI Start: from step 1.
+  // Double tap on Hold, MIDI Start: from the start (the last step backward).
   restart(quantize = false) {
     this.play(false);
-    this.pos = 0;
+    this.pos = this.first();
+    this.way = 1;
+    this.count = 0;
     this.play(true, quantize);
+  }
+
+  first() { return this.direction() === BACKWARD ? this.length() - 1 : 0; }
+
+  // The step after i in the play direction. Pendulum turns at the ends
+  // without playing them twice.
+  next(i, len) {
+    switch (this.direction()) {
+      case BACKWARD: return (i + len - 1) % len;
+      case PENDULUM:
+        if (len < 2) return 0;
+        if (i + this.way < 0 || i + this.way >= len) this.way = -this.way;
+        return clamp(i + this.way, 0, len - 1);
+      case RANDOM: {
+        let r = this.rng;
+        r ^= r << 13; r >>>= 0; r ^= r >>> 17; r ^= r << 5; r >>>= 0;
+        this.rng = r;
+        return r % len;
+      }
+      default: return (i + 1) % len;
+    }
   }
 
   release() {
     for (const n of this.sounding) this.c.seqVoiceOff(n.key);
     this.sounding = [];
+  }
+
+  // Hold pressed on the keyboard view while it plays: its notes join the
+  // drone until Hold is released; then they end and it plays on. Caught
+  // between two notes, the step played last sounds again for the drone.
+  capture(on) {
+    if (on === this.captured || (on && !this.playing)) return;
+    if (on && !this.sounding.length) this.fire(this.last, this.stepMs());
+    this.captured = on;
+    if (!on) this.release();
   }
 
   tick() {
@@ -90,16 +136,20 @@ export class Sequencer {
       if (this.rec !== 'off') this.stopRecord();
       return;
     }
-    for (const n of this.sounding) if (!n.tie && now >= n.offAt) { c.seqVoiceOff(n.key); n.off = true; }
+    // Captured by Hold: the notes sounding stay (a drone, the stutter repeats
+    // it) and the steps go on silently, so it comes back in time.
+    if (!this.captured) for (const n of this.sounding) if (!n.tie && now >= n.offAt) { c.seqVoiceOff(n.key); n.off = true; }
     if (this.sounding.some((n) => n.off)) this.sounding = this.sounding.filter((n) => !n.off);
     if (!this.playing) return;
     const ms = this.stepMs(), len = this.length();
     this.pos %= len;
     if (now - this.gridAt > 2 * ms + 50) this.gridAt = now; // fell behind (tempo jump)
-    while (now >= this.gridAt + this.swing(this.pos)) {
-      this.fire(this.pos, ms);
-      this.pos = (this.pos + 1) % len;
-      if (this.pos === 0) this.replaced.clear();
+    while (now >= this.gridAt + this.swing(this.count)) {
+      if (!this.captured) this.fire(this.pos, ms);
+      this.last = this.pos;
+      this.pos = this.next(this.pos, len);
+      this.count++;
+      if (this.count % len === 0) this.replaced.clear();
       this.gridAt += ms;
     }
   }
@@ -121,7 +171,7 @@ export class Sequencer {
       const n = carried.find((x) => x.key === key);
       if (n) { n.tie = s.tie; n.offAt = offAt; this.sounding.push(n); continue; }
       if (skip?.has(key)) continue;
-      c.seqVoiceOn(key, s.pressure);
+      c.seqVoiceOn(key, s.pressure, s.oct);
       this.sounding.push({ key, tie: s.tie, offAt });
     }
   }
@@ -160,18 +210,17 @@ export class Sequencer {
     if (this.rec === 'live') {
       const c = this.c;
       if (c.timeMs < this.countUntil) return;
-      const len = this.length();
       // The nearest step: the one about to play (then not repeated in this
       // pass, the note is already sounding) or the one that just played.
       const next = this.gridAt - c.timeMs < this.stepMs() / 2;
-      const step = next ? this.pos : (this.pos + len - 1) % len;
+      const step = next ? this.pos : this.last;
       if (next) (this.skip.get(step) || this.skip.set(step, new Set()).get(step)).add(key);
       this.write(step, key, pressure, !c.pr.seqOverdub);
       this.held.set(key, { step, at: c.timeMs });
     } else if (this.rec === 'step') {
       if (!this.chord) {
         this.chord = new Set();
-        this.steps[this.recPos] = { ...emptyStep(), pressure };
+        this.steps[this.recPos] = { ...emptyStep(), pressure, oct: this.c.pr.octaveIndex };
       }
       this.chord.add(key);
       this.write(this.recPos, key, pressure, false);
@@ -198,7 +247,7 @@ export class Sequencer {
       const s = this.steps[this.recPos];
       s.tie = true;
       this.advance();
-      this.steps[this.recPos] = { ...emptyStep(), keys: s.keys.slice(), pressure: s.pressure, gate: s.gate };
+      this.steps[this.recPos] = { ...emptyStep(), keys: s.keys.slice(), oct: s.oct, pressure: s.pressure, gate: s.gate };
     } else {
       this.steps[this.recPos] = emptyStep();
       this.advance();
@@ -213,7 +262,7 @@ export class Sequencer {
     if (replace && !this.replaced.has(i)) { s = this.steps[i] = emptyStep(); this.replaced.add(i); }
     if (!s.keys.includes(key) && s.keys.length < MAX_KEYS) {
       s.keys.push(key);
-      if (s.keys.length === 1) s.pressure = pressure;
+      if (s.keys.length === 1) { s.pressure = pressure; s.oct = this.c.pr.octaveIndex; }
     }
     s.on = true;
     this.changed();
@@ -239,7 +288,7 @@ export class Sequencer {
   toggleStep(i, key) {
     const s = this.steps[i];
     if (!s) return;
-    if (!s.keys.length) { s.keys = [clamp(key, 0, 23)]; s.on = true; } else s.on = !s.on;
+    if (!s.keys.length) { s.keys = [clamp(key, 0, 23)]; s.oct = this.c.pr.octaveIndex; s.on = true; } else s.on = !s.on;
     this.changed();
   }
 
@@ -261,11 +310,12 @@ export class Sequencer {
   // themselves only when they changed).
   status(withSteps) {
     const len = this.length(), ms = this.stepMs(), pattern = len * ms;
-    const elapsed = this.pos * ms - (this.gridAt - this.c.timeMs);
+    const elapsed = this.count * ms - (this.gridAt - this.c.timeMs);
     return {
       playing: this.playing, rec: this.rec, recPos: this.recPos,
       counting: this.rec === 'live' && this.c.timeMs < this.countUntil,
-      current: this.playing ? (this.pos + len - 1) % len : this.pos,
+      countLeft: Math.max(0, Math.ceil((this.countUntil - this.c.timeMs) / this.c.clockTimeMs)),
+      current: this.playing ? this.last : this.pos,
       phaseMs: this.playing ? ((elapsed % pattern) + pattern) % pattern : 0, patternMs: pattern,
       version: this.version, steps: withSteps ? this.steps.map((s) => ({ ...s, keys: s.keys.slice() })) : undefined,
     };
