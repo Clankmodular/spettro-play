@@ -5,8 +5,8 @@
 //
 // Recording (arp + rec): with the sequence stopped, step by step (a pad or
 // chord writes a step and moves on, Hold a rest, a pad held + Hold a tie);
-// while it plays, live, quantized to the nearest step after one bar of
-// count-in, adding to or replacing the steps (seqOverdub).
+// while it plays, live at once, quantized to the nearest step, adding to
+// or replacing the steps (seqOverdub).
 
 export const STEPS = 24;
 const MAX_KEYS = 5;
@@ -45,7 +45,6 @@ export class Sequencer {
     this.sounding = [];     // { key, offAt, tie }
     this.rec = 'off';       // 'off', 'step' or 'live'
     this.recPos = 0;        // step record: the step being written
-    this.countUntil = 0;    // live record: end of the count-in bar
     this.chord = null;      // step record: keys held for this step
     this.held = new Map();  // live record: key -> { step, at }
     this.replaced = new Set(); // live replace: steps already cleared in this pass
@@ -188,10 +187,8 @@ export class Sequencer {
 
   record() {
     this.held.clear(); this.chord = null; this.replaced.clear(); this.skip.clear();
-    if (this.playing) {
-      this.rec = 'live';
-      this.countUntil = this.c.timeMs + 4 * this.c.clockTimeMs;
-    } else {
+    if (this.playing) this.rec = 'live';
+    else {
       this.rec = 'step';
       this.recPos = 0;
     }
@@ -209,7 +206,6 @@ export class Sequencer {
   keyOn(key, pressure) {
     if (this.rec === 'live') {
       const c = this.c;
-      if (c.timeMs < this.countUntil) return;
       // The nearest step: the one about to play (then not repeated in this
       // pass, the note is already sounding) or the one that just played.
       const next = this.gridAt - c.timeMs < this.stepMs() / 2;
@@ -299,6 +295,8 @@ export class Sequencer {
     if ('gate' in values) s.gate = clamp(Math.round(values.gate), 1, 100);
     if ('tie' in values) s.tie = !!values.tie;
     if ('on' in values) s.on = !!values.on;
+    if ('keys' in values) s.keys = [...new Set(values.keys)].filter((k) => k >= 0 && k < 24).slice(0, MAX_KEYS);
+    if ('oct' in values) s.oct = clamp(Math.round(values.oct), 0, 6);
     if (values.clear) Object.assign(s, emptyStep());
     this.changed();
   }
@@ -313,8 +311,6 @@ export class Sequencer {
     const elapsed = this.count * ms - (this.gridAt - this.c.timeMs);
     return {
       playing: this.playing, rec: this.rec, recPos: this.recPos,
-      counting: this.rec === 'live' && this.c.timeMs < this.countUntil,
-      countLeft: Math.max(0, Math.ceil((this.countUntil - this.c.timeMs) / this.c.clockTimeMs)),
       current: this.playing ? this.last : this.pos,
       phaseMs: this.playing ? ((elapsed % pattern) + pattern) % pattern : 0, patternMs: pattern,
       version: this.version, steps: withSteps ? this.steps.map((s) => ({ ...s, keys: s.keys.slice() })) : undefined,

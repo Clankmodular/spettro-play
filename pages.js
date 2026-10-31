@@ -142,8 +142,75 @@ export function drawPresetPage(ctx, m, act) {
   return regions;
 }
 
+// Step page 2 of the sequencer: the note as a block as long as its gate and
+// as tall as its pressure (press or drag on it to shape it). A line sweeps
+// the step and lights the block while the note would sound; with a tie the
+// block runs out of the step. Under it pressure, gate and tie.
+export function drawStepShape(ctx, m, act) {
+  header(ctx, m.title, m.right, act.back);
+  const X = 12, Y = 52, W = 216, H = 88, top = Y + 6, floor = Y + H - 4;
+  ctx.fillStyle = COLOR.card;
+  ctx.fillRect(X, Y, W, H);
+  ctx.fillStyle = COLOR.track; // the step's end
+  ctx.fillRect(X + W - 1, Y, 1, H);
+  const gw = m.tie ? W : Math.max(3, Math.round(W * m.gate / 100));
+  const bh = Math.max(3, Math.round((floor - top) * m.pressure / 255));
+  ctx.fillStyle = COLOR.rail;
+  ctx.fillRect(X, floor - bh, gw, bh);
+  const sweep = X + ((performance.now() % 1500) / 1500) * W;
+  if (sweep < X + gw) {
+    ctx.fillStyle = COLOR.highlight;
+    ctx.fillRect(X, floor - bh, Math.round(sweep - X), bh);
+  }
+  ctx.fillStyle = COLOR.normal;
+  ctx.fillRect(Math.round(sweep), Y, 1, H);
+  if (m.tie) drawText(ctx, '>', X + W - 14, Y + H / 2 - 5, 2, COLOR.normal);
+  const rows = [['pressure', String(m.pressure), act.pressure], ['gate', `${m.gate}%`, act.gate], ['tie', m.tie ? 'on' : 'off', act.tie]];
+  const regions = rows.map(([label, value, step], i) => {
+    const y = 146 + i * 31;
+    card(ctx, X, y, W, 28, label, value, m.row === i ? 'focus' : 'idle', 2, true);
+    return { x: X, y, w: W, h: 28, select: () => act.select(i), step };
+  });
+  const shape = (x, y) => act.shape(Math.round((x - X) / W * 100), Math.round((floor - y) / (floor - top) * 255));
+  regions.push({ x: X, y: Y, w: W, h: H, press: shape, drag: shape });
+  return regions;
+}
+
+// Sequencer, the screen of the step view in place of the analyser: the
+// pattern as a piano roll. A column per step (taller rules on the beats),
+// each note a block at its pitch, as long as its gate (a tie runs into the
+// next step) and brighter the harder it is pressed; steps off dim, the
+// step playing lit. A click on a column opens that step.
+export function drawSeqView(ctx, m, open) {
+  header(ctx, 'sequencer', m.right);
+  const X = 12, Y = 54, W = 216, H = 160, len = m.steps.length, cw = W / len;
+  ctx.fillStyle = COLOR.card;
+  ctx.fillRect(X, Y, W, H);
+  if (m.current >= 0) { ctx.fillStyle = COLOR.cardFocus; ctx.fillRect(Math.round(X + m.current * cw), Y, Math.ceil(cw), H); }
+  for (let i = 0; i <= len; i++) {
+    ctx.fillStyle = i % 4 ? COLOR.track : COLOR.rail;
+    ctx.fillRect(Math.round(X + i * cw), Y, 1, H);
+  }
+  // Pitch range of the pattern, with a margin; a single pitch sits in the middle.
+  const pitches = m.steps.flatMap((s) => s.notes.map((n) => n.pitch));
+  const lo = pitches.length ? Math.min(...pitches) - 1 : 0, hi = pitches.length ? Math.max(...pitches) + 1 : 1;
+  const span = Math.max(hi - lo, 6), base = lo - (span - (hi - lo)) / 2, nh = Math.max(3, Math.min(10, H / span));
+  m.steps.forEach((s, i) => {
+    for (const n of s.notes) {
+      const y = Y + H - (n.pitch - base) / span * H - nh / 2;
+      const w = s.tie ? cw + 1 : Math.max(2, cw * s.gate / 100 - 1);
+      ctx.globalAlpha = s.on ? 0.35 + 0.65 * s.pressure / 255 : 0.2;
+      ctx.fillStyle = i === m.current ? COLOR.normal : COLOR.highlight;
+      ctx.fillRect(Math.round(X + i * cw + 1), Math.round(y), Math.round(w), Math.round(nh));
+    }
+  });
+  ctx.globalAlpha = 1;
+  drawText(ctx, m.footer, 120, 222, 1, COLOR.secondary, 'center');
+  return m.steps.map((_, i) => ({ x: Math.round(X + i * cw), y: Y, w: Math.ceil(cw), h: H, click: () => open(i) }));
+}
+
 // Sequencer recording, over the top of any page: the mode, where it is
-// (step / length, or the beats left of the count-in) and a row of the steps
+// (step / length) and a row of the steps
 // (with notes lighter, the playing or written one in red).
 export function drawSeqRecord(ctx, m) {
   ctx.fillStyle = '#000';
