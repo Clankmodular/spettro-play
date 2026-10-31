@@ -1113,9 +1113,10 @@ export class Ui {
       p.indicate(id, clamp(pos[id] + (assigned ? this.lfoOffset(d) : 0), 0, 1), color);
     }
 
-    // Pads: envelope level in yellow (red above 235), arpeggio stack in white.
+    // Pads: envelope level in yellow (red above 235); the notes of the arpeggio
+    // dim turquoise (white did not show on the light pads).
     const lit = new Array(KEYS).fill(null);
-    for (const k of status.stack) lit[k] = [LED.white, 0.25];
+    for (const k of status.stack) lit[k] = [LED.turquoise, 0.4];
     for (const k of status.captured) lit[k] = [LED.violet, 0.6];
     for (const v of status.voices) if (v.key < KEYS && (v.gate || v.env > 2)) lit[v.key] = [v.env > 235 ? LED.red : LED.yellow, 0.25 + 0.75 * v.env / 255];
     for (let k = 0; k < KEYS; k++) if (status.keys[k] && !lit[k]) lit[k] = [LED.yellow, 0.35];
