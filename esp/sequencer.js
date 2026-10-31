@@ -3,7 +3,7 @@
 // voices), each with pressure, gate and tie. Its notes take voices like the
 // keyboard, follow octave, transpose and root, and are the first stolen.
 //
-// Recording (arp + rec): with the sequence stopped, step by step (a pad or
+// Recording (rec in seq mode): with the sequence stopped, step by step (a pad or
 // chord writes a step and moves on, Hold a rest, a pad held + Hold a tie);
 // while it plays, live at once, quantized to the nearest step, adding to
 // or replacing the steps (seqOverdub).

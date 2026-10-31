@@ -9,11 +9,11 @@ import { COLOR, drawText, textWidth } from './display.js';
 
 const ARROW_W = 22;
 
-function header(ctx, title, right, back) {
+function header(ctx, title, right, back, color = COLOR.normal) {
   const text = back ? `< ${title}` : title;
   let size = 3;
   while (size > 1 && textWidth(text, size) > 208) size--;
-  drawText(ctx, text, 16, 17, size, back ? COLOR.secondary : COLOR.normal);
+  drawText(ctx, text, 16, 17, size, back ? COLOR.secondary : color);
   // The advance of '< ' (textWidth of a string ending in a space leaves the space out).
   if (back) drawText(ctx, title, 16 + textWidth(text, size) - textWidth(title, size), 17, size, COLOR.normal);
   if (right) drawText(ctx, right, 224, 21, 2, COLOR.secondary, 'right');
@@ -180,10 +180,11 @@ export function drawStepShape(ctx, m, act) {
 // pattern as a piano roll. A column per step (taller rules on the beats),
 // each note a block at its pitch, as long as its gate (a tie runs into the
 // next step) and brighter the harder it is pressed; steps off dim, the
-// step playing lit. A click on a column opens that step.
+// step playing (or being written) lit. A click on a column opens that
+// step. While recording the title is red.
 export function drawSeqView(ctx, m, open) {
-  header(ctx, 'sequencer', m.right);
-  const X = 12, Y = 54, W = 216, H = 160, len = m.steps.length, cw = W / len;
+  header(ctx, m.title, m.right, null, m.rec ? COLOR.popup : COLOR.normal);
+  const X = 12, Y = 54, W = 216, H = 178, len = m.steps.length, cw = W / len;
   ctx.fillStyle = COLOR.card;
   ctx.fillRect(X, Y, W, H);
   if (m.current >= 0) { ctx.fillStyle = COLOR.cardFocus; ctx.fillRect(Math.round(X + m.current * cw), Y, Math.ceil(cw), H); }
@@ -205,26 +206,7 @@ export function drawSeqView(ctx, m, open) {
     }
   });
   ctx.globalAlpha = 1;
-  drawText(ctx, m.footer, 120, 222, 1, COLOR.secondary, 'center');
   return m.steps.map((_, i) => ({ x: Math.round(X + i * cw), y: Y, w: Math.ceil(cw), h: H, click: () => open(i) }));
-}
-
-// Sequencer recording, over the top of any page: the mode, where it is
-// (step / length) and a row of the steps
-// (with notes lighter, the playing or written one in red).
-export function drawSeqRecord(ctx, m) {
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, 240, 60);
-  drawText(ctx, m.title, 12, 10, 2, COLOR.popup);
-  drawText(ctx, m.right, 228, 10, 2, COLOR.normal, 'right');
-  const len = m.steps.length, gap = len > 16 ? 1 : 2;
-  const w = Math.floor((216 - gap * (len - 1)) / len), x0 = 12 + Math.floor((216 - (w * len + gap * (len - 1))) / 2);
-  m.steps.forEach((full, i) => {
-    ctx.fillStyle = i === m.at ? COLOR.popup : full ? COLOR.secondary : COLOR.track;
-    ctx.fillRect(x0 + i * (w + gap), i % 4 ? 36 : 32, w, i % 4 ? 14 : 18); // beat starts taller
-  });
-  ctx.fillStyle = COLOR.rule;
-  ctx.fillRect(0, 59, 240, 1);
 }
 
 // Sub detune: +-100 cent slider, dragged or clicked.

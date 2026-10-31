@@ -277,14 +277,16 @@ export class Ui {
         return this.call('setTrillo', !this.pr.trilloOn), (this.pr.trilloOn = !this.pr.trilloOn);
       case 'loop':
         if (!down) return;
-        // Web sequencer: arp held + rec records notes and movements; rec (or
-        // arp) alone ends the recording.
-        if (this.pr.seqMode && this.buttons.arp?.down) {
-          const a = this.buttons.arp;
-          clearTimeout(a.timer); a.consumed = true;
-          return this.seqRecording() !== 'off' ? this.seqStopRecord() : this.seqStartRecord();
+        // Web sequencer: in seq, rec records notes and movements together
+        // (the next tap, or arp, ends it); a second tap within 320 ms clears
+        // the movement cycles, as the double tap of the motion loop.
+        if (this.seqRecording() !== 'off') {
+          const quick = t - (this.seqRecAt || 0) < 320;
+          this.seqStopRecord();
+          if (quick) { this.loop.lanes.clear(); this.loop.armed = false; this.display.show('loop cleared', 900); }
+          return;
         }
-        if (this.seqRecording() !== 'off') return this.seqStopRecord();
+        if (this.pr.seqMode) { this.seqRecAt = t; return this.seqStartRecord(); }
         return this.loopButton();
       case 'lfoAssign': return this.lfoButton(down);
       case 'lfoWave':
@@ -616,7 +618,7 @@ export class Ui {
 
   // ---- Sequencer (notes/seq_spec.md) ------------------------------------------
   // The arp button's menu picks arp or seq. In seq a tap on arp switches the
-  // pads between the steps and the keyboard; arp held + rec records.
+  // pads between the steps and the keyboard; rec records notes and movements.
 
   seqRecording() { return this.seqRec || 'off'; }
   stepView() { return this.pr.seqMode && this.seqView === 'steps' && this.seqRecording() === 'off'; }
@@ -1106,7 +1108,8 @@ export class Ui {
     const d = this.display, ctx = d.ctx, pr = this.pr, s = this.state;
     const page = this.page;
     this.regions = [];
-    if (page === 'analyser' && !this.stepView()) { d.render({ ...s, pr }); this.drawSeqRecord(ctx); return; }
+    // The sequence in place of the analyser in the step view and while it records.
+    if (page === 'analyser' && !this.stepView() && this.seqRecording() === 'off') { d.render({ ...s, pr }); return; }
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, 240, 240);
     const back = () => this.openPage('analyser');
@@ -1124,17 +1127,7 @@ export class Ui {
       this.regions = P.drawDetunePage(ctx, pr.subDetuneCents,
         (cents) => this.set({ subDetuneCents: clamp(Math.round(cents), -100, 100) }), back);
     }
-    this.drawSeqRecord(ctx);
     if (d.message && now() < d.message.until) d.drawMessage(d.message.text);
-  }
-
-  // While the sequencer records: how far it is, over the top of the page.
-  drawSeqRecord(ctx) {
-    const rec = this.seqRecording(), seq = this.state.status.seq, len = this.pr.seqLength;
-    if (rec === 'off') return;
-    const steps = this.seqSteps.slice(0, len).map((st) => st.keys.length > 0 && st.on);
-    if (rec === 'step') return P.drawSeqRecord(ctx, { title: 'rec step', right: `${seq.recPos + 1}/${len}`, steps, at: seq.recPos });
-    P.drawSeqRecord(ctx, { title: 'rec live', steps, right: `${seq.current + 1}/${len}`, at: seq.current });
   }
 
   drawNote(ctx) {
@@ -1245,16 +1238,16 @@ export class Ui {
     return [...P.drawListPage(ctx, title, m, items, right, back), nav];
   }
 
-  // The step view's screen (in place of the analyser): the pattern drawn,
+  // The step view's screen, and the recording's (in place of the analyser): the pattern drawn,
   // pitch from the pad tuning with each step's octave and the sequence's.
   drawSeqView(ctx) {
     const pr = this.pr, seq = this.state.status.seq, freqs = this.keyFrequencies();
     const steps = this.seqSteps.slice(0, pr.seqLength).map((st) => ({ ...st,
       notes: st.keys.map((k) => ({ pitch: 12 * Math.log2(freqs[k] / 440) + 12 * (st.oct - 3 + pr.seqOctave - 3) })) }));
-    const shift = pr.seqOctave - 3;
-    return P.drawSeqView(ctx, { steps, current: seq.playing ? seq.current : -1,
-      right: seq.playing ? `${seq.current + 1}/${pr.seqLength}` : 'stop',
-      footer: `${SEQ_DIVISIONS[pr.seqDivision][0]}  ${SEQ_DIRECTIONS[pr.seqDirection]}  swing ${pr.seqSwing}%  oct ${shift > 0 ? '+' : ''}${shift}` },
+    // Recording: red title; step by step the step being written is the lit one.
+    const rec = this.seqRecording(), at = rec === 'step' ? seq.recPos : seq.playing ? seq.current : -1;
+    return P.drawSeqView(ctx, { steps, current: at, rec: rec !== 'off',
+      title: rec === 'off' ? 'sequencer' : `rec ${rec}`, right: at >= 0 ? `${at + 1}/${pr.seqLength}` : 'stop' },
     (i) => { this.seqStepSel = i; this.openPage('seqstep'); this.seqCall('audition', i); });
   }
 
