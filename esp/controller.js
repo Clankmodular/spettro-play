@@ -20,7 +20,7 @@ const ENV_ACTIVE = 2;
 // Modulation destination IDs (shared/modulation_destinations.h).
 export const DEST = {
   Volume: 0, Pitch: 1, Blend: 2, OscWave: 4, SubWave: 5, Stereo: 6, Rotate: 8, DelayTime: 9,
-  None: 11, Trillo: 13, Drive: 21, ReverbSize: 25, ReverbTilt: 26, DelayFeedback: 27,
+  None: 11, Trillo: 13, Drive: 21, ReverbSize: 25, ReverbDetail: 26, DelayFeedback: 27,
   LfoAmount: 30, LfoSpeed: 31, Attack: 34, Release: 35, Bands: 37, Spread: 39, Width: 40,
   Crossmod: 41, Feedback: 42, Dispersion: 43, Master: 45, SubDetune: 47, SubDivider: 48,
   FilterMode: 49, LfoWave: 50, Octave: 52, Transpose: 53, Tune: 54,
@@ -36,7 +36,7 @@ export const STUTTER = [['drone', 0], ['1/2', 2], ['1/4.', 1.5], ['1/4', 1], ['1
 const SUPPORTED = new Set([DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
   DEST.Width, DEST.DelayTime, DEST.Feedback, DEST.Dispersion, DEST.OscWave, DEST.SubWave,
   DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Octave, DEST.Transpose, DEST.Tune,
-  DEST.ReverbSize, DEST.ReverbTilt, DEST.DelayFeedback]);
+  DEST.ReverbSize, DEST.ReverbDetail, DEST.DelayFeedback]);
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -49,9 +49,10 @@ export function defaultPreset() {
     spectralRotate: 32767.5, spectralWidth: 63.75, spectralBands: 255, spectralSpread: 128,
     spectralMode: 0, delayTime: 0, delayRegen: 0, delayShift: 0, delayReverse: 0,
     // Web: the freeze slots carry reverb size (255 = the firmware hall),
-    // reverb tilt and delay feedback (240 and up: hold), changed in the web
-    // build of the Daisy DSP. Diffuse (delayRegen) holds the reverb from 240.
-    reverbSize: 255, reverbTilt: 128, delayFeedback: 0, driveAmount: 0,
+    // reverb detail (0 = the firmware tank, 255 = one loop per band) and
+    // delay feedback (240 and up: hold), changed in the web build of the
+    // Daisy DSP. Diffuse (delayRegen) holds the reverb from 240.
+    reverbSize: 255, reverbDetail: 0, delayFeedback: 0, driveAmount: 0,
     fxMix: 0.5, // web: dry/effects, 0.5 = both at unity
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
@@ -62,20 +63,22 @@ export function defaultPreset() {
   };
 }
 
-// Older presets. With the freeze: the firmware hall, no tilt, no feedback,
-// and the LFO assignments of the freeze controls dropped. With reverb decay
-// and bands (30 October): decay goes (diffuse is the tail again), bands is
-// the tilt.
+// Older presets. With the freeze: the firmware hall, no detail, no
+// feedback, and the LFO assignments of the freeze controls dropped. With
+// reverb decay and bands (30 October) or tilt (until 31 October): they go,
+// detail 0 (the firmware tank) and no LFO on it.
 export function migratePreset(pr) {
   if ('freezeDuration' in pr || !('reverbSize' in pr || 'reverbDecay' in pr)) {
     const { freezeDuration, freezeSelection, freezeProbability, ...rest } = pr;
     const lfo = Array.from(pr.lfoAssigned || []);
     if (lfo.length > 3) lfo[3] &= ~((1 << 1) | (1 << 2) | (1 << 3)); // DEST 25, 26, 27
-    return { ...rest, reverbSize: 255, reverbTilt: 128, delayFeedback: 0, lfoAssigned: lfo };
+    return { ...rest, reverbSize: 255, reverbDetail: 0, delayFeedback: 0, lfoAssigned: lfo };
   }
-  if ('reverbDecay' in pr) {
-    const { reverbDecay, reverbBands, ...rest } = pr;
-    return { ...rest, reverbSize: 255, reverbTilt: reverbBands ?? 128 };
+  if ('reverbDecay' in pr || 'reverbTilt' in pr) {
+    const { reverbDecay, reverbBands, reverbTilt, ...rest } = pr;
+    const lfo = Array.from(pr.lfoAssigned || []);
+    if (lfo.length > 3) lfo[3] &= ~(1 << 2); // DEST 26
+    return { ...rest, reverbSize: 'reverbDecay' in pr ? 255 : pr.reverbSize, reverbDetail: 0, lfoAssigned: lfo };
   }
   return pr;
 }
@@ -690,7 +693,7 @@ export class Controller {
     f[59] = clamp(pr.lfoSpeed + assign(DEST.LfoSpeed), 0, 255);
     f[60] = clamp(pr.reverbSize + cc(DEST.ReverbSize), 0, 255);
     f[61] = 255;
-    f[62] = clamp(pr.reverbTilt + cc(DEST.ReverbTilt), 0, 255);
+    f[62] = clamp(pr.reverbDetail + cc(DEST.ReverbDetail), 0, 255);
     f[63] = clamp(pr.delayFeedback + cc(DEST.DelayFeedback), 0, 255);
     f[64] = 0xf2;
     f[65] = (pr.bandAttackShape & 15) | ((pr.bandReleaseShape & 15) << 4);
