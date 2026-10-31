@@ -82,55 +82,9 @@
             delay and reverb, so their echoes and tails build on the repeats, while whatever else you play sounds over it. The fader has 12 steps from the bottom (one violet LED each): the plain drone,
             then 1/2, 1/4., 1/4, 1/8., 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/64 of the beat; the screen shows the step.
             Letting go of ❄ stops it and gives the fader back to transpose; the step is kept, so the next drone stutters again at once.</li>
-          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page; its first item, <b>mode</b>, chooses
-            <b>arp</b> or <b>seq</b> (the sequencer, below). Then tempo division, pattern, gate length, groove and its amount.
+          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page (tempo division, pattern, gate length, groove and its amount).
             With the arpeggio on, Hold pauses and restarts it.</li>
           <li><b>clock</b> — tap it in time to set the tempo; long press: the tempo page. The LED blinks on the beat.</li>
-        </ul>
-      </section>
-
-      <section>
-        <h2>Sequencer</h2>
-        <ul>
-          <li>Long press <b>arp</b> and set <b>mode</b> to <b>seq</b>. The menu also sets the
-            <b>length</b> (1–24 steps, 16 to start), the <b>step</b> (1/4 to 1/32, triplets too), the play direction (<b>play</b>:
-            forward, backward, pendulum, random), <b>swing</b>, and whether live recording <b>adds</b> to the steps or
-            <b>replaces</b> them.</li>
-          <li>The 24 pads become the <b>steps</b> (arp LED <span class="sw g"></span> green, lit only in this view):
-            blue the steps with notes (dim when off), yellow the one playing, dark past the length.
-            Tap a step: on or off (an empty one gets the last note you played). Hold a step: its page opens and you hear it once.
-            It has two pages (swipe the title sideways, or click its right side): first the <b>notes</b>, one per row,
-            each moved up or down to the next pad's pitch, with <b>add note</b> (the last note you played) and
-            <b>remove</b> (the note picked last); then the note drawn as a block, as long as its <b>gate</b> and as tall as its
-            <b>pressure</b> (press or drag on it to shape it, a line sweeps it), and <b>tie</b> to carry it into the next step.
-            Hold ❄ and tap a step: the length ends there.</li>
-          <li>In the step view the screen shows the <b>sequence</b> instead of the filters: a column per step, each note a block
-            at its pitch, as long as its gate (ties run on) and brighter the harder it is pressed; the step playing is lit.
-            Click a column to open that step.</li>
-          <li><b>❄</b> in the step view is <b>▷ □</b>: tap to play or stop (LED green while it plays), tap twice quickly to start
-            again from the beginning. Hold it 1.5 s (the screen warns and the LED blinks red after half a second) to
-            <b>clear</b> the notes; it plays on, empty. Let go earlier, or touch a step, and nothing is cleared.
-            With MIDI clock it starts on the beat and follows Start, Stop and Continue.</li>
-          <li><b>Octaves:</b> the sequence and the keyboard have their own. In the step view the octave buttons move the
-            sequence (their LED green); on the keyboard, and while recording, they move only what you play.
-            Each step keeps the octave it was recorded at. Transpose moves both.</li>
-          <li>Tap <b>arp</b>: the pads go back to playing notes over the sequence (arp LED off) and ❄ is Hold and drone again.
-            The sequence steals voices from itself, never from what you play. Tap arp again for the steps.</li>
-          <li>Hold <b>❄</b> there while the sequence plays: its notes become the <b>drone</b> too (caught between two notes,
-            the last step sounds again), so the transpose fader <b>stutters</b> the sequence. It keeps time silently meanwhile:
-            let go of ❄ and it plays on, in step.</li>
-          <li><b>Record:</b> in seq mode tap <b>‹</b> (key <kbd>6</kbd>; its LED <span class="sw r"></span> red):
-            it records the notes and the movements of the controls together. Tap ‹ again (or arp) to stop; two quick taps
-            clear the movement cycles.
-            Stopped, it records <b>step by step</b> from step 1: each pad or chord writes a step, ❄ writes a rest,
-            a pad held + ❄ ties the note into the next step. Playing, it records <b>live</b> at once
-            (the pads pulse on the beat), quantized to the nearest step; and every control you move records a motion cycle as
-            long as the pattern, in time with it, replacing that control's old cycle. <b>Slides</b> are recorded too:
-            bend a note towards a neighbour pad, or slide onto it, and the sequence plays the same gesture (in time with
-            the tempo); the step's second page draws it as a red line over the note.
-            While recording, the screen shows the sequence page with a red title (rec live or rec step), so you see
-            the notes arrive and where it is.</li>
-          <li>The sequence, its settings and its motion cycles are saved with presets.</li>
         </ul>
       </section>
 
@@ -242,8 +196,7 @@
         <p>The <b>keyboard mode</b> button, or <kbd>`</kbd>, turns the PC keyboard into the pads:</p>
         <ul>
           <li><kbd>Q</kbd>…<kbd>I</kbd> top row, <kbd>A</kbd>…<kbd>K</kbd> middle row, <kbd>Z</kbd>…<kbd>,</kbd> bottom row.</li>
-          <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> octave −2 −1 +1 +2, <kbd>space</kbd> Hold, <kbd>5</kbd> arp, <kbd>6</kbd> motion loop
-            (in seq mode: sequencer record).</li>
+          <li><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> octave −2 −1 +1 +2, <kbd>space</kbd> Hold, <kbd>5</kbd> arp, <kbd>6</kbd> motion loop.</li>
           <li>Many PC keyboards cannot read every chord of three or more keys.</li>
         </ul>
       </section>

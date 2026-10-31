@@ -87,7 +87,6 @@ class SpectrumProcessor extends AudioWorkletProcessor {
         Object.assign(c, data.values);
         break;
       case 'call': c[data.method](...(data.args || [])); break;
-      case 'seq': c.seq[data.method](...(data.args || [])); break;
       case 'stutter': this.stutter.step = data.step; break;
       case 'midi': c.midi(data.bytes); break;
       case 'adc':

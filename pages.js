@@ -9,22 +9,12 @@ import { COLOR, drawText, textWidth } from './display.js';
 
 const ARROW_W = 22;
 
-// The ST7789 has no transparency: a solid colour a (0..1) of the way from
-// bg to fg, rounded to RGB565 as the firmware would draw it.
-function shade(fg, bg, a) {
-  const parse = (c) => c.match(/\d+/g).map(Number);
-  const [f, b] = [parse(fg), parse(bg)], v = f.map((x, i) => b[i] + (x - b[i]) * a);
-  const r = Math.round(v[0] * 31 / 255), g = Math.round(v[1] * 63 / 255), bl = Math.round(v[2] * 31 / 255);
-  return `rgb(${r * 255 / 31 | 0},${g * 255 / 63 | 0},${bl * 255 / 31 | 0})`;
-}
-
-function header(ctx, title, right, back, color = COLOR.normal) {
+function header(ctx, title, right, back) {
   const text = back ? `< ${title}` : title;
   let size = 3;
   while (size > 1 && textWidth(text, size) > 208) size--;
-  drawText(ctx, text, 16, 17, size, back ? COLOR.secondary : color);
-  // The advance of '< ' (textWidth of a string ending in a space leaves the space out).
-  if (back) drawText(ctx, title, 16 + textWidth(text, size) - textWidth(title, size), 17, size, COLOR.normal);
+  drawText(ctx, text, 16, 17, size, back ? COLOR.secondary : COLOR.normal);
+  if (back) drawText(ctx, title, 16 + textWidth('< ', size), 17, size, COLOR.normal);
   if (right) drawText(ctx, right, 224, 21, 2, COLOR.secondary, 'right');
   ctx.fillStyle = COLOR.rule;
   ctx.fillRect(16, 46, 208, 1);
@@ -59,11 +49,10 @@ function card(ctx, x, y, w, h, label, value, state = 'idle', valueSize = 3, with
 }
 
 // Rows of a list page. Item: [label, value, { step, click }]. Three tall
-// cards as on the instrument, or compact rows when the list is longer
-// (narrower still for six or seven).
+// cards as on the instrument, or compact rows when the list is longer.
 function rows(ctx, menu, items) {
-  const compact = items.length > 3, n = items.length;
-  const top = compact ? 52 : 54, h = n > 6 ? 24 : n > 5 ? 27 : compact ? 33 : 54, gap = n > 6 ? 2 : compact ? 3 : 6;
+  const compact = items.length > 3;
+  const top = compact ? 52 : 54, h = compact ? 33 : 54, gap = compact ? 3 : 6;
   return items.map(([label, value, act = {}], i) => {
     const y = top + i * (h + gap);
     card(ctx, 12, y, 216, h, label, value, menu.row === i ? 'focus' : 'idle', 3, !!act.step);
@@ -149,88 +138,6 @@ export function drawPresetPage(ctx, m, act) {
   }
   drawText(ctx, m.hint, 120, 228, 1, COLOR.secondary, 'center');
   return regions;
-}
-
-// Step page 2 of the sequencer: the note as a block as long as its gate and
-// as tall as its pressure (press or drag on it to shape it). A line sweeps
-// the step and lights the block while the note would sound; with a tie the
-// block runs out of the step. Under it pressure, gate and tie.
-export function drawStepShape(ctx, m, act) {
-  header(ctx, m.title, m.right, act.back);
-  const X = 12, Y = 52, W = 216, H = 88, top = Y + 6, floor = Y + H - 4;
-  ctx.fillStyle = COLOR.card;
-  ctx.fillRect(X, Y, W, H);
-  ctx.fillStyle = COLOR.track; // the step's end
-  ctx.fillRect(X + W - 1, Y, 1, H);
-  const gw = m.tie ? W : Math.max(3, Math.round(W * m.gate / 100));
-  const bh = Math.max(3, Math.round((floor - top) * m.pressure / 255));
-  ctx.fillStyle = COLOR.rail;
-  ctx.fillRect(X, floor - bh, gw, bh);
-  const sweep = X + ((performance.now() % 1500) / 1500) * W;
-  if (sweep < X + gw) {
-    ctx.fillStyle = COLOR.highlight;
-    ctx.fillRect(X, floor - bh, Math.round(sweep - X), bh);
-  }
-  ctx.fillStyle = COLOR.normal;
-  ctx.fillRect(Math.round(sweep), Y, 2, H);
-  if (m.tie) drawText(ctx, '>', X + W - 14, Y + H / 2 - 5, 2, COLOR.normal);
-  // A recorded slide over the step (bottom no bend, top on the next pad); a
-  // tick where the note moves to the next pad. Past the step it is cut.
-  if (m.bend) {
-    ctx.fillStyle = COLOR.popup;
-    let px = null, py = null, pad = m.bend[0]?.[1];
-    for (const [t, from, , pos] of m.bend) {
-      if (t > 1) break;
-      const x = Math.round(X + t * W), y = Math.round(floor - pos * (floor - top));
-      if (px !== null) ctx.fillRect(px, py, Math.max(1, x - px), 2); // held until this point
-      if (from !== pad) { ctx.fillRect(x, top, 2, floor - top); pad = from; }
-      else if (px !== null) ctx.fillRect(x, Math.min(py, y), 2, Math.abs(y - py) + 2);
-      px = x; py = y;
-    }
-    if (px !== null) ctx.fillRect(px, py, Math.max(1, Math.round(X + W * (m.tie ? 1 : m.gate / 100)) - px), 2);
-  }
-  const rows = [['pressure', String(m.pressure), act.pressure], ['gate', `${m.gate}%`, act.gate], ['tie', m.tie ? 'on' : 'off', act.tie]];
-  const regions = rows.map(([label, value, step], i) => {
-    const y = 146 + i * 31;
-    card(ctx, X, y, W, 28, label, value, m.row === i ? 'focus' : 'idle', 2, true);
-    return { x: X, y, w: W, h: 28, select: () => act.select(i), step };
-  });
-  const shape = (x, y) => act.shape(Math.round((x - X) / W * 100), Math.round((floor - y) / (floor - top) * 255));
-  regions.push({ x: X, y: Y, w: W, h: H, press: shape, drag: shape });
-  return regions;
-}
-
-// Sequencer, the screen of the step view in place of the analyser: the
-// pattern as a piano roll. A column per step (taller rules on the beats),
-// each note a block at its pitch, as long as its gate (a tie runs into the
-// next step) and brighter the harder it is pressed; steps off dim, the
-// step playing (or being written) lit. A click on a column opens that
-// step. While recording the title is red.
-export function drawSeqView(ctx, m, open) {
-  header(ctx, m.title, m.right, null, m.rec ? COLOR.popup : COLOR.normal);
-  // Whole-pixel columns (as on the 240 px screen), centred in the card.
-  const len = m.steps.length, cw = Math.floor(216 / len), W = cw * len, X = 120 - (W >> 1), Y = 54, H = 178;
-  ctx.fillStyle = COLOR.card;
-  ctx.fillRect(12, Y, 216, H);
-  if (m.current >= 0) { ctx.fillStyle = COLOR.cardFocus; ctx.fillRect(X + m.current * cw, Y, cw, H); }
-  for (let i = 0; i <= len; i++) {
-    ctx.fillStyle = i % 4 ? COLOR.track : COLOR.rail;
-    ctx.fillRect(X + i * cw, Y, 1, H);
-  }
-  // Pitch range of the pattern, with a margin; a single pitch sits in the middle.
-  const pitches = m.steps.flatMap((s) => s.notes.map((n) => n.pitch));
-  const lo = pitches.length ? Math.min(...pitches) - 1 : 0, hi = pitches.length ? Math.max(...pitches) + 1 : 1;
-  const span = Math.max(hi - lo, 6), base = lo - (span - (hi - lo)) / 2, nh = Math.max(3, Math.min(10, H / span));
-  m.steps.forEach((s, i) => {
-    for (const n of s.notes) {
-      const y = Y + H - (n.pitch - base) / span * H - nh / 2;
-      const w = s.tie ? cw + 1 : Math.max(2, Math.round(cw * s.gate / 100) - 1);
-      const level = s.on ? 0.35 + 0.65 * s.pressure / 255 : 0.2;
-      ctx.fillStyle = shade(i === m.current ? COLOR.normal : COLOR.highlight, i === m.current ? COLOR.cardFocus : COLOR.card, level);
-      ctx.fillRect(X + i * cw + 1, Math.round(y), w, Math.round(nh));
-    }
-  });
-  return m.steps.map((_, i) => ({ x: X + i * cw, y: Y, w: cw, h: H, click: () => open(i) }));
 }
 
 // Sub detune: +-100 cent slider, dragged or clicked.
