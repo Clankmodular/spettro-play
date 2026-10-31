@@ -279,9 +279,11 @@ export class Ui {
       this.openPage('system'); this.systemPage = 'system';
       return;
     }
-    // The envelope and arp menus close on any other button, which then acts as usual.
+    // The envelope and arp menus close on any other button, which then acts as
+    // usual; the octave buttons leave them open (web, asked by the user).
     const owner = { envelope: 'envelope', arp: 'arp', loops: 'loop' }[this.page];
-    if (owner && down && id !== owner) this.openPage('analyser');
+    const keepsMenu = id.startsWith('oct') && (this.page === 'arp' || this.page === 'envelope');
+    if (owner && down && id !== owner && !keepsMenu) this.openPage('analyser');
     if (this.lfoLearn.learning && down && id.startsWith('oct')) { this.toggleLfo(DEST.Octave); this.lfoLearn.touched = true; b.consumed = true; return; }
 
     switch (id) {
