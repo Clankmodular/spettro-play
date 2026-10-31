@@ -94,8 +94,8 @@
         <ul>
           <li>Long press <b>arp</b> and set <b>mode</b> to <b>seq</b>. The menu also sets the
             <b>length</b> (1–24 steps, 16 to start), the <b>step</b> (1/4 to 1/32, triplets too), the <b>direction</b>
-            (forward, backward, pendulum, random), <b>swing</b>, whether live recording <b>adds</b> to the steps or
-            <b>replaces</b> them, and <b>clear</b> (click twice).</li>
+            (forward, backward, pendulum, random), <b>swing</b>, and whether live recording <b>adds</b> to the steps or
+            <b>replaces</b> them.</li>
           <li>The 24 pads become the <b>steps</b> (arp LED <span class="sw g"></span> green, lit only in this view):
             blue the steps with notes (dim when off), yellow the one playing, dark past the length.
             Tap a step: on or off (an empty one gets the last note you played). Hold a step: its page opens and you hear it once.
@@ -108,7 +108,9 @@
             at its pitch, as long as its gate (ties run on) and brighter the harder it is pressed; the step playing is lit.
             Click a column to open that step. Under it: step length, direction, swing and the sequence's octave.</li>
           <li><b>❄</b> in the step view is <b>▷ □</b>: tap to play or stop (LED green while it plays), tap twice quickly to start
-            again from the beginning. With MIDI clock it starts on the beat and follows Start, Stop and Continue.</li>
+            again from the beginning. Hold it 1.5 s (the screen warns and the LED blinks red after half a second) to
+            <b>clear</b> the notes; it plays on, empty. Let go earlier, or touch a step, and nothing is cleared.
+            With MIDI clock it starts on the beat and follows Start, Stop and Continue.</li>
           <li><b>Octaves:</b> the sequence and the keyboard have their own. In the step view the octave buttons move the
             sequence (their LED green); on the keyboard, and while recording, they move only what you play.
             Each step keeps the octave it was recorded at. Transpose moves both.</li>

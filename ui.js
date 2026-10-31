@@ -260,11 +260,12 @@ export class Ui {
       case 'hold':
         // Web sequencer: in the step view Hold is play / stop (on release; a
         // second tap within 400 ms starts again from step 1; held while a
-        // step pad is touched it sets the length instead). During step
-        // record it writes a rest, or a tie with pads held.
+        // step pad is touched it sets the length instead; held 1.5 s alone
+        // it clears the sequence). During step record it writes a rest, or a
+        // tie with pads held.
         if (down) b.route = this.seqRecording() === 'step' ? 'rest' : this.stepView() ? 'transport' : 'hold';
         if (b.route === 'rest') return down && this.seqCall('rest');
-        if (b.route === 'transport') return !down && !b.consumed && this.seqTransportTap(t);
+        if (b.route === 'transport') return this.seqHoldButton(b, down, t);
         return this.call(down ? 'holdDown' : 'holdUp');
       case 'arp':
         if (down) { b.timer = setTimeout(() => { b.consumed = true; this.openPage(this.page === 'arp' ? 'analyser' : 'arp'); }, 300); return; }
@@ -635,6 +636,31 @@ export class Ui {
     this.display.show(on ? 'sequencer' : 'arpeggio', 700);
   }
 
+  // Hold in the step view. Released before 500 ms: play / stop. Held, it
+  // warns (screen, LED blinking red) and at 1.5 s clears the notes of the
+  // sequence (it plays on, empty); released between, nothing. A step pad
+  // touched meanwhile sets the length and calls the clearing off.
+  seqHoldButton(b, down, t) {
+    if (down) {
+      b.warnTimer = setTimeout(() => { b.warning = true; this.display.show('hold to clear', 1000); }, 500);
+      b.clearTimer = setTimeout(() => {
+        this.seqHoldCancel(b);
+        b.consumed = true;
+        this.seqCall('clear');
+        this.display.show('seq cleared', 900);
+      }, 1500);
+      return;
+    }
+    this.seqHoldCancel(b);
+    if (!b.consumed && t - b.at < 500) this.seqTransportTap(t);
+  }
+
+  seqHoldCancel(b) {
+    clearTimeout(b.warnTimer);
+    clearTimeout(b.clearTimer);
+    b.warning = false;
+  }
+
   // Hold tapped in the step view: play / stop; again within 400 ms: from
   // step 1. With the MIDI clock the start waits for the beat.
   seqTransportTap(t) {
@@ -657,6 +683,7 @@ export class Ui {
       const hold = this.buttons.hold;
       if (hold?.down && hold.route === 'transport') {
         hold.consumed = true;
+        this.seqHoldCancel(hold);
         timers[i] = null;
         this.set({ seqLength: i + 1 });
         return this.display.show(`length ${i + 1}`, 700);
@@ -1005,7 +1032,7 @@ export class Ui {
     // Sequencer: arp green only in the step view, Hold green while it plays
     // there, rec red while it records.
     const seq = status.seq, seqRec = this.seqRecording();
-    if (this.stepView()) p.light('hold', seq.playing ? LED.green : null);
+    if (this.stepView()) p.light('hold', this.buttons.hold?.warning ? (blink(200) ? LED.red : null) : seq.playing ? LED.green : null);
     else p.light('hold', status.latched ? LED.red : status.captured.length || status.midiCaptured ? LED.violet : null);
     if (pr.seqMode) p.light('arp', this.page === 'arp' ? (blink(400) ? LED.green : null) : this.stepView() ? LED.green : null);
     else p.light('arp', this.page === 'arp' ? (blink(400) ? LED.turquoise : null)
@@ -1146,14 +1173,10 @@ export class Ui {
     const mode = ['mode', pr.seqMode ? 'seq' : 'arp', s(0)];
     if (pr.seqMode) {
       // Clear asks for a second click within a second.
-      const clear = { click: () => {
-        if (now() - (this.seqClearAt || 0) < 1000) { this.seqCall('clear'); this.seqClearAt = 0; this.display.show('seq cleared', 800); }
-        else { this.seqClearAt = now(); this.display.show('again to clear', 1000); }
-      } };
       return P.drawListPage(ctx, 'sequencer', this.menus.arp, [mode,
         ['length', `${pr.seqLength} steps`, s(1)], ['step', SEQ_DIVISIONS[pr.seqDivision][0], s(2)],
         ['direction', SEQ_DIRECTIONS[pr.seqDirection], s(3)], ['swing', `${pr.seqSwing}%`, s(4)],
-        ['rec', pr.seqOverdub ? 'add' : 'replace', s(5)], ['clear', '', clear],
+        ['rec', pr.seqOverdub ? 'add' : 'replace', s(5)],
       ], this.state?.status.seq.playing ? 'play' : 'stop');
     }
     return P.drawListPage(ctx, 'arpeggio', this.menus.arp, [mode,
