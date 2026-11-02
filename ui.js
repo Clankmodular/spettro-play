@@ -30,7 +30,7 @@ const LFO_LABEL = { [DEST.Attack]: 'attack', [DEST.Release]: 'release', [DEST.Dr
   [DEST.DelayTime]: 'fx time', [DEST.Feedback]: 'reverb', [DEST.Dispersion]: 'fx disp', [DEST.ReverbSize]: 'rev size',
   [DEST.ReverbDetail]: 'rev detail', [DEST.DelayFeedback]: 'fx feedback', [DEST.OscWave]: 'osc1 wave',
   [DEST.SubWave]: 'osc2 wave', [DEST.Blend]: 'osc blend', [DEST.Crossmod]: 'osc Xmod', [DEST.Master]: 'master',
-  [DEST.Octave]: 'octave', [DEST.Transpose]: 'transpose', [DEST.Tune]: 'tune' };
+  [DEST.Transpose]: 'transpose', [DEST.Tune]: 'tune' };
 const LED = { white: '#f1efe9', yellow: '#ffb321', turquoise: '#36d3dc', red: '#ff3a2f', blue: '#4d9dff',
   green: '#47d86a', orange: '#ff8a1c', violet: '#c6a2ff' };
 const MODE_COLORS = [LED.blue, LED.yellow, LED.green, LED.red];
@@ -86,6 +86,7 @@ export class Ui {
     this.panel = panel;
     this.display = display;
     this.pr = defaultPreset();
+    this.octaveSeq = 0;
     this.reverbBank = false; // the three knobs by Δt: delay or reverb
     this.stutterStep = 0; // web drone stutter, 0..11 (STUTTER), kept between drones
     this.adc = { tune: 0.5, volume: 0.75 };
@@ -123,6 +124,8 @@ export class Ui {
   send(type, data) { this.port?.postMessage({ type, ...data }); }
   call(method, ...args) { this.send('call', { method, args }); }
   set(values) { Object.assign(this.pr, values); this.send('set', { values }); this.presetDirty = true; }
+  // Octave changes go in the note cycle while rec is armed.
+  setOctave(index) { this.set({ octaveIndex: index }); this.loopRecordNote(0, -3, index); }
   sendAdc() { this.send('adc', { values: [[ADC_TUNE, this.adc.tune], [ADC_MASTER, this.adc.volume]] }); }
 
   // ---- Controls -----------------------------------------------------------
@@ -292,7 +295,6 @@ export class Ui {
     const owner = { envelope: 'envelope', arp: 'arp', arpnote: 'arp', loops: 'loop' }[this.page];
     const keepsMenu = id.startsWith('oct') && (this.page === 'arp' || this.page === 'arpnote' || this.page === 'envelope');
     if (owner && down && id !== owner && !keepsMenu) this.openPage('analyser');
-    if (this.lfoLearn.learning && down && id.startsWith('oct')) { this.toggleLfo(DEST.Octave); this.lfoLearn.touched = true; b.consumed = true; return; }
 
     switch (id) {
       // Tap: change octave (the lit one again: back to 0). Held 300 ms or
@@ -303,8 +305,8 @@ export class Ui {
           const index = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 }[id];
           b.previous = this.pr.octaveIndex;
           b.octave = this.pr.octaveIndex === index ? 3 : index;
-          this.set({ octaveIndex: b.octave });
-        } else if (!b.consumed && held >= 300 && this.pr.octaveIndex === b.octave) this.set({ octaveIndex: b.previous });
+          this.setOctave(b.octave);
+        } else if (!b.consumed && held >= 300 && this.pr.octaveIndex === b.octave) this.setOctave(b.previous);
         return;
       }
       case 'hold': return this.call(down ? 'holdDown' : 'holdUp');
@@ -695,7 +697,7 @@ export class Ui {
       return;
     }
     L.taps.push(t); L.movedSinceTap = false;
-    if (!L.armed) { L.armed = true; L.completed.clear(); return; }
+    if (!L.armed) { L.armed = true; L.completed.clear(); L.octaveTouched = false; return; }
     // The second press closes the open cycles at once.
     L.armed = false;
     let longest = 0;
@@ -720,23 +722,32 @@ export class Ui {
       else if (p === -2 && held.delete(key)) held.add(target);
     }
     for (const key of held) lane.points.push([lane.length - 1, key, 0]);
-    this.sendNoteLoop(lane);
+    // Octave changed in the take: each round starts from the octave of the
+    // first note (before it, at 0).
+    if (lane.octaveTouched || lane.points.some(([, , p]) => p === -3)) lane.points.unshift([0, 0, -3, lane.octave, 0]);
+    // From the position at the closing press (the top): read a moment later,
+    // the first note, at 0, counted as already played until the next round.
+    this.sendNoteLoop(lane, false, (end - lane.origin) % lane.length);
   }
 
   // Web: notes played while rec is armed make one cycle of their own (id
   // 'notes'), from the first note to the closing press; a new take with notes
-  // replaces it. Bends (pressure -1, target, pos) and slides (-2, target) go
-  // in it too. The worklet plays it (Controller.setNoteLoop).
+  // replaces it. Bends (pressure -1, target, pos), slides (-2, target) and
+  // octave changes (key 0, -3, octave) go in it too; an octave change
+  // before the first note only sets where the cycle starts. The worklet plays it (Controller.setNoteLoop).
   loopRecordNote(key, pressure, target, pos) {
     const L = this.loop, t = now();
     if (!L.armed || L.completed.has('notes')) return;
     let lane = L.lanes.get('notes');
-    if (!lane && !(pressure > 0)) return; // a release or bend before the first note
+    if ((!lane || lane.length) && !(pressure > 0)) { // a release, bend or octave before the first note
+      if (pressure === -3) L.octaveTouched = true;
+      return;
+    }
     L.movedSinceTap = true;
     if (!lane || lane.length) {
       if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('notes'); return; }
       if (lane) this.sendNoteLoop(null);
-      lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true };
+      lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true, octave: this.pr.octaveIndex, octaveTouched: !!L.octaveTouched };
       L.lanes.set('notes', lane);
     }
     if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t); L.completed.add('notes'); return; }
@@ -744,8 +755,8 @@ export class Ui {
   }
 
   // The note cycle to the worklet: where it is now, or on the beat (align).
-  sendNoteLoop(lane, align = false) {
-    const loop = lane?.length ? { points: lane.points, length: lane.length, rate: lane.rate || 1, phase: this.lanePos(lane, now()) } : null;
+  sendNoteLoop(lane, align = false, phase) {
+    const loop = lane?.length ? { points: lane.points, length: lane.length, rate: lane.rate || 1, phase: phase ?? this.lanePos(lane, now()) } : null;
     this.call('setNoteLoop', loop, align);
   }
 
@@ -1006,7 +1017,8 @@ export class Ui {
     // to the transpose; the worklet stops the stutter.
     const drone = this.drone();
     if (drone !== !!this.wasDrone) { this.wasDrone = drone; this.syncPanel(); }
-    // Fields the controller owns.
+    // Fields the controller owns; the octave when the note cycle changes it.
+    if (data.status.octaveSeq !== this.octaveSeq) { this.octaveSeq = data.status.octaveSeq; this.pr.octaveIndex = data.status.octave; }
     this.pr.latchedNote = data.pr.latchedNote;
     this.pr.trilloOn = data.pr.trilloOn;
     this.bpm = data.status.bpm;
@@ -1082,11 +1094,13 @@ export class Ui {
     [1, 2, 4].forEach((d, i) => p.light(`sub${i}`, pr.subOctave === d ? LED.white : null));
     // Transpose LEDs (12, bottom first): + yellow from the bottom, − red from
     // the top; during a drone violet from the bottom up to the stutter zone
-    // (one LED: the plain drone).
-    const droning = this.drone(), tr = pr.articulationDegreeTranspose;
+    // (one LED: the plain drone). Assigned to the LFO: white, at the
+    // transpose the voices play (as currentDegreeTranspose in the controller).
+    const droning = this.drone(), trLfo = (pr.lfoAssigned[DEST.Transpose >> 3] & (1 << (DEST.Transpose & 7))) !== 0;
+    const tr = clamp(pr.articulationDegreeTranspose + Math.round(this.lfoOffset(DEST.Transpose) * 24), -12, 12);
     for (let i = 0; i < 12; i++) {
       const on = droning ? i <= this.stutterStep : tr > 0 ? i < tr : tr < 0 && i >= 12 + tr;
-      p.light(`transpose${i}`, on ? (droning ? LED.violet : tr > 0 ? LED.yellow : LED.red) : null);
+      p.light(`transpose${i}`, on ? (droning ? LED.violet : trLfo ? LED.white : tr > 0 ? LED.yellow : LED.red) : null);
     }
     p.light('preset', this.page === 'preset' || this.presetName ? (this.presetDirty && this.presetName ? LED.red : LED.yellow) : null);
     // Clock: yellow flash on the beat, steady while the BPM page is open.

@@ -87,7 +87,7 @@ export function drawLoopPage(ctx, m, act) {
     const open = new Map();
     const bar = (key, from, to) => ctx.fillRect(px(from), Y + 6 + key * 4 + 1, Math.max(2, px(to) - px(from)), 3);
     for (const [at, key, p, target] of pts) {
-      if (p === -1) continue; // a bend: the note stays on its row
+      if (p === -1 || p === -3) continue; // a bend (the note stays on its row) or an octave change
       if (open.has(key)) { bar(key, open.get(key), at); open.delete(key); }
       if (p > 0) open.set(key, at);
       else if (p === -2) open.set(target, at); // a slide: on the next pad's row

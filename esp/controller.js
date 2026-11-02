@@ -36,7 +36,7 @@ export const STUTTER = [['drone', 0], ['1/2', 2], ['1/4.', 1.5], ['1/4', 1], ['1
   ['1/8', 0.5], ['1/8T', 1 / 3], ['1/16', 0.25], ['1/16T', 1 / 6], ['1/32', 0.125], ['1/64', 0.0625]];
 const SUPPORTED = new Set([DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
   DEST.Width, DEST.DelayTime, DEST.Feedback, DEST.Dispersion, DEST.OscWave, DEST.SubWave,
-  DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Octave, DEST.Transpose, DEST.Tune,
+  DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Transpose, DEST.Tune,
   DEST.ReverbSize, DEST.ReverbDetail, DEST.DelayFeedback]);
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -81,7 +81,18 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
-  return withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr))));
+  return withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr)))));
+}
+
+// Web: the LFO no longer goes on the octave (asked by the user); presets
+// that had it lose it.
+function withoutOctaveLfo(pr) {
+  const d = DEST.Octave, bit = 1 << (d & 7);
+  if (!(pr.lfoAssigned?.[d >> 3] & bit) && !pr.lfoDepth?.[d]) return pr;
+  const lfoAssigned = Array.from(pr.lfoAssigned || []), lfoDepth = Array.from(pr.lfoDepth || []);
+  if (lfoAssigned.length > d >> 3) lfoAssigned[d >> 3] &= ~bit;
+  if (lfoDepth.length > d) lfoDepth[d] = 0;
+  return { ...pr, lfoAssigned, lfoDepth };
 }
 
 // Presets before the bipolar bands: their count goes in the lower half (255
@@ -197,7 +208,7 @@ export class Controller {
   }
 
   currentOctaveIndex() {
-    return clamp(this.pr.octaveIndex + Math.round(this.lfo(DEST.Octave) * 6 / 255), 0, 6);
+    return clamp(this.pr.octaveIndex, 0, 6);
   }
 
   currentDegreeTranspose() {
@@ -749,7 +760,7 @@ export class Controller {
   // ---- Web: the note cycle of the motion loop ------------------------------
   // Recorded on the panel while rec is armed (points [ms, key, pressure],
   // pressure 0 = off; [ms, key, -1, target, pos] a bend, [ms, key, -2,
-  // target] a slide to the next pad), played here on the 5 ms tick through the keyboard
+  // target] a slide to the next pad, [ms, 0, -3, octave] an octave change), played here on the 5 ms tick through the keyboard
   // path, so Hold and the arpeggio work on it. phase: where it is now, in
   // recorded time; align: start from the top on the next beat (quantize).
 
@@ -772,6 +783,12 @@ export class Controller {
     this.noteLoop.on.clear();
   }
 
+  // An octave change of the note cycle: the panel follows it (octaveSeq).
+  loopOctave(index) {
+    this.pr.octaveIndex = clamp(index, 0, 6);
+    this.octaveSeq = (this.octaveSeq || 0) + 1;
+  }
+
   noteLoopTick() {
     const n = this.noteLoop;
     if (!n) return;
@@ -783,6 +800,7 @@ export class Controller {
         this.noteLooping = true;
         if (p > 0) { if (n.on.has(key)) this.keyOff(key); this.keyOn(key, p); n.on.add(key); }
         else if (p === 0) { if (n.on.delete(key)) this.keyOff(key); }
+        else if (p === -3) this.loopOctave(target);
         else if (n.on.has(key) && p === -1) this.keyBend(key, target, bend);
         else if (n.on.has(key) && p === -2 && !n.on.has(target)) {
           this.keySlide(key, target);
@@ -936,6 +954,7 @@ export class Controller {
       arpKey: this.arpKey,
       arpPaused: !!this.arpPaused,
       octave: this.pr.octaveIndex,
+      octaveSeq: this.octaveSeq || 0,
       bpm: this.bpm,
       clockPhase: this.clockPhase(),
       lfoOutput: this.lfoOutput,
