@@ -36,6 +36,8 @@ const LED = { white: '#f1efe9', yellow: '#ffb321', turquoise: '#36d3dc', red: '#
 const MODE_COLORS = [LED.blue, LED.yellow, LED.green, LED.red];
 // Loop page: 24 cycles (one per pad) and their speeds.
 const LOOP_LANES = 24;
+// Cycles the worklet plays (Controller), on its 5 ms tick.
+const WORKLET_LANES = { notes: 'setNoteLoop', octave: 'setOctaveLoop' };
 const LOOP_RATES = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
 const rateLabel = (r) => (r < 1 ? `/${Math.round(1 / r)}` : `X${r}`);
 const LOOP_BARS = [1, 2, 3, 4, 6, 8, 12, 16]; // quantize choices (4 beats a bar)
@@ -124,8 +126,8 @@ export class Ui {
   send(type, data) { this.port?.postMessage({ type, ...data }); }
   call(method, ...args) { this.send('call', { method, args }); }
   set(values) { Object.assign(this.pr, values); this.send('set', { values }); this.presetDirty = true; }
-  // Octave changes go in the note cycle while rec is armed.
-  setOctave(index) { this.set({ octaveIndex: index }); this.loopRecordNote(0, -3, index); }
+  // Octave changes are recorded while rec is armed (loopRecordOctave).
+  setOctave(index) { const from = this.pr.octaveIndex; this.set({ octaveIndex: index }); this.loopRecordOctave(index, from); }
   sendAdc() { this.send('adc', { values: [[ADC_TUNE, this.adc.tune], [ADC_MASTER, this.adc.volume]] }); }
 
   // ---- Controls -----------------------------------------------------------
@@ -692,72 +694,115 @@ export class Ui {
     L.taps = L.taps.filter((x) => t - x < 320);
     if (L.taps.length && !L.movedSinceTap) {
       L.taps = []; L.armed = false; L.lanes.clear();
-      this.sendNoteLoop(null);
+      for (const id in WORKLET_LANES) this.sendLoop(id, null);
       this.display.show('loop cleared', 900);
       return;
     }
     L.taps.push(t); L.movedSinceTap = false;
-    if (!L.armed) { L.armed = true; L.completed.clear(); L.octaveTouched = false; return; }
+    if (!L.armed) { L.armed = true; L.completed.clear(); return; }
     // The second press closes the open cycles at once.
     L.armed = false;
     let longest = 0;
-    for (const lane of L.lanes.values()) {
+    for (const [id, lane] of L.lanes) {
       if (lane.length) continue;
-      this.loopFinish(lane, t);
+      this.loopFinish(lane, t, id);
       longest = Math.max(longest, lane.length);
     }
     if (longest) this.display.show(`loop ${(longest / this.beatMs()).toFixed(1)} beat`, 900);
   }
 
-  loopFinish(lane, end) {
+  loopFinish(lane, end, id) {
     lane.length = clamp(end - lane.origin, 1, this.loopMaxMs());
     lane.points = lane.points.filter(([at]) => at < lane.length);
     lane.idx = -1;
-    if (!lane.notes) return;
-    // Notes still held at the end stop with the cycle.
-    const held = new Set();
-    for (const [, key, p, target] of lane.points) {
-      if (p > 0) held.add(key);
-      else if (p === 0) held.delete(key);
-      else if (p === -2 && held.delete(key)) held.add(target);
+    if (!(id in WORKLET_LANES)) return;
+    const octaves = (l) => l.points.some(([, , p]) => p === -3);
+    if (id === 'notes') {
+      // Notes still held at the end stop with the cycle.
+      const held = new Set();
+      for (const [, key, p, target] of lane.points) {
+        if (p > 0) held.add(key);
+        else if (p === 0) held.delete(key);
+        else if (p === -2 && held.delete(key)) held.add(target);
+      }
+      for (const key of held) lane.points.push([lane.length - 1, key, 0]);
+      // Octave changed in the take: each round starts from the octave the
+      // cycle started in (before them, at 0), and the octave cycle goes:
+      // one source of octave changes at a time.
+      if (octaves(lane)) {
+        lane.points.unshift([0, 0, -3, lane.octave, 0]);
+        if (this.loop.lanes.delete('octave')) this.sendLoop('octave', null);
+      }
+    } else {
+      // An octave take takes the octave changes out of the note cycle.
+      const notes = this.loop.lanes.get('notes');
+      if (notes?.length && octaves(notes)) {
+        notes.points = notes.points.filter(([, , p]) => p !== -3);
+        this.sendLoop('notes', notes);
+      }
     }
-    for (const key of held) lane.points.push([lane.length - 1, key, 0]);
-    // Octave changed in the take: each round starts from the octave of the
-    // first note (before it, at 0).
-    if (lane.octaveTouched || lane.points.some(([, , p]) => p === -3)) lane.points.unshift([0, 0, -3, lane.octave, 0]);
     // From the position at the closing press (the top): read a moment later,
-    // the first note, at 0, counted as already played until the next round.
-    this.sendNoteLoop(lane, false, (end - lane.origin) % lane.length);
+    // the first event, at 0, counted as already played until the next round.
+    this.sendLoop(id, lane, false, (end - lane.origin) % lane.length);
   }
 
   // Web: notes played while rec is armed make one cycle of their own (id
   // 'notes'), from the first note to the closing press; a new take with notes
   // replaces it. Bends (pressure -1, target, pos), slides (-2, target) and
-  // octave changes (key 0, -3, octave) go in it too; an octave change
-  // before the first note only sets where the cycle starts. The worklet plays it (Controller.setNoteLoop).
+  // octave changes (key 0, -3, octave, see loopRecordOctave) go in it too;
+  // octave changes before the first note of the take open it there. The
+  // worklet plays it (Controller.setNoteLoop).
   loopRecordNote(key, pressure, target, pos) {
     const L = this.loop, t = now();
     if (!L.armed || L.completed.has('notes')) return;
     let lane = L.lanes.get('notes');
-    if ((!lane || lane.length) && !(pressure > 0)) { // a release, bend or octave before the first note
-      if (pressure === -3) L.octaveTouched = true;
-      return;
-    }
+    if ((!lane || lane.length) && !(pressure > 0)) return; // a release or bend before the first note
     L.movedSinceTap = true;
     if (!lane || lane.length) {
-      if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('notes'); return; }
-      if (lane) this.sendNoteLoop(null);
-      lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true, octave: this.pr.octaveIndex, octaveTouched: !!L.octaveTouched };
+      const octave = L.lanes.get('octave'), open = octave && !octave.length;
+      if (!lane && !open && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('notes'); return; }
+      if (lane) this.sendLoop('notes', null);
+      if (open) {
+        L.lanes.delete('octave');
+        lane = { origin: octave.origin, length: 0, points: octave.points, idx: -1, rate: 1, notes: true, octave: octave.from };
+      } else lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true, octave: this.pr.octaveIndex };
       L.lanes.set('notes', lane);
     }
-    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t); L.completed.add('notes'); return; }
+    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t, 'notes'); L.completed.add('notes'); return; }
     lane.points.push(pressure < 0 ? [t - lane.origin, key, pressure, target, pos ?? 0] : [t - lane.origin, key, pressure]);
   }
 
-  // The note cycle to the worklet: where it is now, or on the beat (align).
-  sendNoteLoop(lane, align = false, phase) {
+  // Octave changes while rec is armed: in the note cycle while notes are
+  // being recorded, otherwise a cycle of their own (id 'octave'), from the
+  // first change to the closing press, played by the worklet like the notes
+  // (so it also plays alone, with nothing played). A new octave take
+  // replaces it; out of a take a change by hand deletes it, as for a control.
+  loopRecordOctave(index, from) {
+    const L = this.loop, t = now();
+    if (!L.armed) { if (L.lanes.delete('octave')) this.sendLoop('octave', null); return; }
+    L.movedSinceTap = true;
+    const notes = L.lanes.get('notes');
+    if (notes && !notes.length) {
+      if (!L.completed.has('notes')) notes.points.push([t - notes.origin, 0, -3, index, 0]);
+      return;
+    }
+    if (L.completed.has('octave')) return;
+    let lane = L.lanes.get('octave');
+    if (!lane || lane.length) {
+      if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('octave'); return; }
+      if (lane) this.sendLoop('octave', null);
+      lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, from };
+      L.lanes.set('octave', lane);
+    }
+    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t, 'octave'); L.completed.add('octave'); return; }
+    lane.points.push([t - lane.origin, 0, -3, index, 0]);
+  }
+
+  // A worklet cycle (notes, octave) to the worklet: where it is now, or on
+  // the beat (align).
+  sendLoop(id, lane, align = false, phase) {
     const loop = lane?.length ? { points: lane.points, length: lane.length, rate: lane.rate || 1, phase: phase ?? this.lanePos(lane, now()) } : null;
-    this.call('setNoteLoop', loop, align);
+    this.call(WORKLET_LANES[id], loop, align);
   }
 
   loopRecord(id, v) {
@@ -770,7 +815,7 @@ export class Ui {
     // 24 cycles at most, one per pad of the loop page.
     if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add(id); return; }
     if (!lane || lane.length) { L.lanes.set(id, { origin: t, length: 0, points: [[0, v]], idx: -1, rate: 1 }); return; }
-    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t); L.completed.add(id); return; }
+    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t, id); L.completed.add(id); return; }
     lane.points.push([t - lane.origin, v]);
   }
 
@@ -778,10 +823,10 @@ export class Ui {
     const L = this.loop, t = now();
     for (const [id, lane] of L.lanes) {
       if (!lane.length) {
-        if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, lane.origin + this.loopMaxMs()); L.completed.add(id); }
+        if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, lane.origin + this.loopMaxMs(), id); L.completed.add(id); }
         continue;
       }
-      if (lane.notes) continue; // played by the worklet
+      if (id in WORKLET_LANES) continue; // played by the worklet
       const pos = this.lanePos(lane, t);
       let i = 0;
       while (i + 1 < lane.points.length && lane.points[i + 1][0] <= pos) i++;
@@ -816,7 +861,7 @@ export class Ui {
         L.lanes.set(id, { origin: t - c.phase / rate, length: c.length, points: c.points, idx: -1, rate, ...(c.notes ? { notes: true } : {}) });
       }
     }
-    this.sendNoteLoop(L.lanes.get('notes') || null);
+    for (const id in WORKLET_LANES) this.sendLoop(id, L.lanes.get(id) || null);
   }
 
   // ---- Loop page (web): rec held 500 ms. Every LED goes dark but rec
@@ -842,7 +887,7 @@ export class Ui {
     if (e.lastPad === index && t - e.lastTap < 320) {
       const id = ids[index];
       this.loop.lanes.delete(id);
-      if (id === 'notes') this.sendNoteLoop(null);
+      if (id in WORKLET_LANES) this.sendLoop(id, null);
       this.syncPanel();
       this.display.show(`${this.loopName(id)} cleared`, 900);
       e.sel = Math.min(index, this.loop.lanes.size - 1);
@@ -878,7 +923,7 @@ export class Ui {
     const beat = this.beatMs(), t = now();
     const into = ((this.state?.status.clockPhase ?? 0) / 256) * beat;
     lane.origin = t + (into ? beat - into : 0);
-    if (lane.notes) this.sendNoteLoop(lane, true);
+    if (id in WORKLET_LANES) this.sendLoop(id, lane, true);
     this.display.show(`${this.loopName(id)} ${LOOP_BARS[e.quant.bars]} bar`, 900);
     e.quant = null;
   }
@@ -891,7 +936,7 @@ export class Ui {
     const i = clamp(LOOP_RATES.indexOf(lane.rate || 1) + step, 0, LOOP_RATES.length - 1);
     lane.rate = LOOP_RATES[i];
     lane.origin = t - pos / lane.rate; // the position goes on from where it is
-    if (lane.notes) this.sendNoteLoop(lane);
+    if (id in WORKLET_LANES) this.sendLoop(id, lane);
   }
 
   loopName(id) {
@@ -910,8 +955,10 @@ export class Ui {
         yes: () => this.applyQuantize(), no: () => { e.quant = null; },
       });
     }
+    // The octave cycle as a stepped line, from -2 at the bottom to +2.
+    const shown = id === 'octave' ? { ...lane, points: lane.points.map(([at, , , o]) => [at, clamp((o - 1) / 4, 0, 1)]) } : lane;
     return P.drawLoopPage(ctx, {
-      name: id ? this.loopName(id) : '', count: ids.length, lane: done ? lane : null,
+      name: id ? this.loopName(id) : '', count: ids.length, lane: done ? shown : null,
       pos: done ? this.lanePos(lane, now()) : 0, speed: done ? rateLabel(lane.rate || 1) : '',
     }, { back: () => this.openPage('analyser'), speed: (n) => this.loopSpeed(n) });
   }
@@ -935,6 +982,9 @@ export class Ui {
     if (sel === 'transpose') {
       const tr = this.pr.articulationDegreeTranspose;
       for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? LED.blue : null);
+    }
+    if (sel === 'octave') {
+      for (const [b, index] of Object.entries({ octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 })) p.light(b, this.pr.octaveIndex === index ? LED.blue : null);
     }
     for (let k = 0; k < KEYS; k++) p.padLight(k, k < ids.length ? LED.blue : null, k === e.sel ? 1 : 0.4);
   }

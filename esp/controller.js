@@ -763,18 +763,26 @@ export class Controller {
   // target] a slide to the next pad, [ms, 0, -3, octave] an octave change), played here on the 5 ms tick through the keyboard
   // path, so Hold and the arpeggio work on it. phase: where it is now, in
   // recorded time; align: start from the top on the next beat (quantize).
+  // The octave cycle (octave changes recorded without notes) is played the
+  // same way, before the notes on each tick.
 
   setNoteLoop(loop, align = false) {
     this.noteLoopRelease();
-    if (!loop || !(loop.length > 0)) { this.noteLoop = null; this.noteLoopPlaying = false; return; }
+    this.noteLoop = this.eventLoop(loop, align);
+    this.noteLoopPlaying = !!this.noteLoop;
+  }
+
+  setOctaveLoop(loop, align = false) { this.octaveLoop = this.eventLoop(loop, align); }
+
+  eventLoop(loop, align) {
+    if (!loop || !(loop.length > 0)) return null;
     const rate = loop.rate || 1;
     const len = loop.length, intoBeat = (this.timeMs - this.clockStart) % this.clockTimeMs;
     const origin = align ? this.timeMs + (intoBeat ? this.clockTimeMs - intoBeat : 0) : this.timeMs - (loop.phase || 0) / rate;
     // last: the position already played; events after it and up to the
     // position of each tick fire (from the top: the one at 0 too).
     const last = align ? -1 : (((loop.phase || 0) - 1e-6) % len + len) % len;
-    this.noteLoop = { points: loop.points, length: len, rate, origin, last, on: new Set() };
-    this.noteLoopPlaying = true;
+    return { points: loop.points, length: len, rate, origin, last, on: new Set() };
   }
 
   noteLoopRelease() {
@@ -783,14 +791,18 @@ export class Controller {
     this.noteLoop.on.clear();
   }
 
-  // An octave change of the note cycle: the panel follows it (octaveSeq).
+  // An octave change of a cycle: the panel follows it (octaveSeq).
   loopOctave(index) {
     this.pr.octaveIndex = clamp(index, 0, 6);
     this.octaveSeq = (this.octaveSeq || 0) + 1;
   }
 
   noteLoopTick() {
-    const n = this.noteLoop;
+    this.eventLoopTick(this.octaveLoop);
+    this.eventLoopTick(this.noteLoop);
+  }
+
+  eventLoopTick(n) {
     if (!n) return;
     if (this.timeMs < n.origin) return; // waiting for the beat
     const pos = ((this.timeMs - n.origin) * n.rate) % n.length;
