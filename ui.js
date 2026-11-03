@@ -18,19 +18,21 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 const BANK_ORDER = [0, 2, 3, 1, 4]; // Classic, Fold, Noise, Exciter, External (oscillator::Next)
 const LFO_WAVES = ['tri', 'ramp', 'saw', 'square', 'random']; // Daisy waves 1..5
 const SHAPES = ['flat', 'saw', 'inv saw', 'triangle', 'inv tri'];
-const CC_DESTS = [[DEST.None, 'none'], [DEST.OscWave, 'osc1 wave'], [DEST.SubWave, 'osc2 wave'], [DEST.Blend, 'blend'],
-  [DEST.Crossmod, 'Xmod'], [DEST.SubDetune, 'sub detune'], [DEST.SubDivider, 'osc2 div'], [DEST.Drive, 'drive'],
-  [DEST.Attack, 'attack'], [DEST.Release, 'release'], [DEST.Trillo, 'trl speed'], [DEST.Bands, 'bands'],
-  [DEST.Spread, 'spread'], [DEST.Rotate, 'rotate'], [DEST.Width, 'width'],
-  [DEST.FilterMode, 'flt mode'], [DEST.DelayTime, 'fx time'], [DEST.Feedback, 'reverb'], [DEST.Dispersion, 'disp'],
-  [DEST.ReverbSize, 'rev size'], [DEST.ReverbDetail, 'rev detail'], [DEST.DelayFeedback, 'fx feedback'],
-  [DEST.Master, 'master']];
-const LFO_LABEL = { [DEST.Attack]: 'attack', [DEST.Release]: 'release', [DEST.Drive]: 'drive', [DEST.Bands]: 'flt band',
-  [DEST.Spread]: 'flt spread', [DEST.Rotate]: 'flt rotate', [DEST.Stereo]: 'flt stereo', [DEST.Width]: 'flt width',
-  [DEST.DelayTime]: 'fx time', [DEST.Feedback]: 'reverb', [DEST.Dispersion]: 'fx disp', [DEST.ReverbSize]: 'rev size',
-  [DEST.ReverbDetail]: 'rev detail', [DEST.DelayFeedback]: 'fx feedback', [DEST.OscWave]: 'osc1 wave',
-  [DEST.SubWave]: 'osc2 wave', [DEST.Blend]: 'osc blend', [DEST.Crossmod]: 'osc Xmod', [DEST.Master]: 'master',
+// Names on the screen as printed on the panel (asked by the user), as the
+// loop page (loopName): the knobs by Δt by their bank.
+const LFO_LABEL = { [DEST.Attack]: 'attack', [DEST.Release]: 'release', [DEST.Drive]: 'drive', [DEST.Bands]: 'bands',
+  [DEST.Spread]: 'shape', [DEST.Rotate]: 'shift', [DEST.Width]: 'reso',
+  [DEST.DelayTime]: 'time', [DEST.Dispersion]: 'spread', [DEST.DelayFeedback]: 'feedback',
+  [DEST.ReverbSize]: 'size', [DEST.ReverbDetail]: 'detail', [DEST.Feedback]: 'diffuse',
+  [DEST.OscWave]: 'osc B', [DEST.SubWave]: 'osc A', [DEST.Blend]: 'blend', [DEST.Crossmod]: 'xmod', [DEST.Master]: 'volume',
   [DEST.Transpose]: 'transpose', [DEST.Tune]: 'tune' };
+const CC_DESTS = [[DEST.None, 'none'], [DEST.OscWave, 'osc B'], [DEST.SubWave, 'osc A'], [DEST.Blend, 'blend'],
+  [DEST.Crossmod, 'xmod'], [DEST.SubDetune, 'osc A detune'], [DEST.SubDivider, 'osc A 1/2/4'], [DEST.Drive, 'drive'],
+  [DEST.Attack, 'attack'], [DEST.Release, 'release'], [DEST.Trillo, 'arp tempo'], [DEST.Bands, 'bands'],
+  [DEST.Spread, 'shape'], [DEST.Rotate, 'shift'], [DEST.Width, 'reso'],
+  [DEST.FilterMode, 'mode'], [DEST.DelayTime, 'time'], [DEST.Dispersion, 'spread'], [DEST.DelayFeedback, 'feedback'],
+  [DEST.ReverbSize, 'size'], [DEST.ReverbDetail, 'detail'], [DEST.Feedback, 'diffuse'],
+  [DEST.Master, 'volume']];
 // One LFO per control (3 November): the controls on the pads of the LFO
 // page, in panel order, and the knob or fader of each (the three by Δt in
 // their delay or reverb bank).
@@ -121,10 +123,9 @@ export class Ui {
     // focus: the control whose LFO amount, speed and wave edit (assigning
     // or on the LFO page), -1 none.
     this.lfoLearn = { startedAt: 0, touched: false, focus: -1 };
-    this.lfoEdit = null; // assign held: the LFO page, the assignments on the pads
-    // Where the amount and speed knobs are, and whether they have reached
-    // the value of the LFO in focus (pickup, as pots on the instrument).
-    this.lfoPots = { amount: { pos: 0.5, caught: false }, speed: { pos: 0.5, caught: false } };
+    this.lfoEdit = null; // assign: the LFO page, the assignments on the pads
+    // Where the amount and speed knobs are (they turn to the LFO in focus).
+    this.lfoPots = { amount: { pos: 0.5 }, speed: { pos: 0.5 } };
     this.lfoTemplate = { wave: 1, speed: 128 }; // a new assignment starts as the last one edited
     this.loop = { armed: false, lanes: new Map(), completed: new Set(), taps: [], movedSinceTap: false };
     this.loopEdit = null; // rec held: the cycles on the pads (see loopEditPad)
@@ -276,8 +277,7 @@ export class Ui {
 
   setLfoFocus(d) {
     this.lfoLearn.focus = d;
-    for (const P of Object.values(this.lfoPots)) P.caught = false;
-    this.lfoCatch();
+    this.lfoSyncPots();
     this.send('prop', { values: { lfoFocus: d } }); // sent in every SPI frame
   }
 
@@ -287,11 +287,13 @@ export class Ui {
     return id === 'amount' ? 0.5 + (this.pr.lfoDepth[d] || 0) / 510 : this.pr.lfoSpeeds[d] / 255;
   }
 
-  // A pot already where the value is has caught it.
-  lfoCatch() {
+  // Amount and speed knobs show the LFO in focus: they turn to its values
+  // and go on from there (the web knobs can; pots on the instrument would
+  // need encoders or a pickup).
+  lfoSyncPots() {
     const d = this.lfoTarget();
     if (d < 0) return;
-    for (const [id, P] of Object.entries(this.lfoPots)) if (Math.abs(P.pos - this.lfoPotValue(id, d)) <= 2 / 255) P.caught = true;
+    for (const [id, P] of Object.entries(this.lfoPots)) { P.pos = this.lfoPotValue(id, d); this.panel.set(id, P.pos); }
   }
 
   setLfoField(field, d, v) {
@@ -308,20 +310,11 @@ export class Ui {
     this.set({ lfoDepth: depths, lfoAssigned: mask });
   }
 
-  // Amount and speed knobs: pickup. The knob turns, the value of the LFO in
-  // focus follows once the knob has reached it (crossed it).
+  // Amount and speed knobs: the LFO in focus follows them at once.
   lfoPot(id, v) {
-    const P = this.lfoPots[id], from = P.pos;
-    P.pos = v;
+    this.lfoPots[id].pos = v;
     const d = this.lfoTarget();
     if (d < 0) { this.lfoPotIndicate(id, d); return; }
-    const stored = this.lfoPotValue(id, d);
-    if (!P.caught && Math.abs(v - stored) > 2 / 255 && (from - stored) * (v - stored) > 0) {
-      this.display.show(`LFO ${LFO_LABEL[d] || ''}: turn ${v < stored ? 'up' : 'down'} to pick up`, 700);
-      this.lfoPotIndicate(id, d);
-      return;
-    }
-    P.caught = true;
     if (id === 'amount') {
       let depth = Math.round((v - 0.5) * 510);
       if (Math.abs(depth) < 4) depth = 0; // the middle: off
@@ -342,13 +335,13 @@ export class Ui {
   }
 
   // Ring of amount or speed: the value of the LFO in focus in white, amount
-  // from the middle (up or down) and brightening with its wave; blinking
-  // while the knob has not reached it; dark with no LFO in focus.
+  // from the middle (up or down) and brightening with its wave; dark with no
+  // LFO in focus.
   lfoPotIndicate(id, d) {
     if (d < 0) { this.panel.indicate(id, 0, null); return; }
-    const P = this.lfoPots[id], stored = this.lfoPotValue(id, d);
+    const stored = this.lfoPotValue(id, d);
     const wave = (this.state?.status.lfoWaves?.[d] ?? 0) / 255;
-    const level = !P.caught ? ((now() % 400) < 200 ? 1 : 0.25) : id === 'amount' ? 0.3 + 0.7 * wave : 1;
+    const level = id === 'amount' ? 0.3 + 0.7 * wave : 1;
     this.panel.indicate(id, stored, LED.white, id === 'amount' ? 0.5 : 0, level);
   }
 
@@ -372,9 +365,9 @@ export class Ui {
   // by the user): the other LEDs go dark but assign (blinking white); the
   // pads show the assignments in panel order, red, and every control with
   // an LFO is lit white with it. A pad, or a control touched or turned,
-  // comes into focus (a control without an LFO becomes a new one as soon as
-  // amount leaves the middle): amount, speed and the wave LEDs show and
-  // edit its LFO (pickup), the screen shows wave, speed and amount (arrows:
+  // comes into focus, lit red (a control without an LFO becomes a new one as
+  // soon as amount leaves the middle): amount, speed and the wave LEDs show
+  // and edit its LFO, the screen shows wave, speed and amount (arrows:
   // the encoder on the instrument). A double tap on a pad removes it. A tap
   // on assign or any other button but wave leaves.
 
@@ -424,12 +417,12 @@ export class Ui {
     } else if (field === 'speed') {
       const speed = lfoSpeedControl(clamp(lfoSpeedIndex(pr.lfoSpeeds[d]) + s, 0, LFO_SPEEDS.length - 1));
       this.setLfoField('lfoSpeeds', d, speed); this.lfoTemplate.speed = speed;
-      this.lfoPots.speed.caught = false; this.lfoCatch();
+      this.lfoSyncPots();
     } else if (field === 'amount') {
       let depth = clamp(pr.lfoDepth[d] + 5 * s, -255, 255);
       if (depth === 0) depth = 5 * s; // stays assigned; a double tap on its pad removes it
       this.setLfoDepth(d, depth);
-      this.lfoPots.amount.caught = false; this.lfoCatch();
+      this.lfoSyncPots();
     }
   }
 
@@ -452,13 +445,13 @@ export class Ui {
     const wave = d >= 0 ? (this.state.status.lfoWaves?.[d] ?? 0) / 255 : 0;
     for (const id of Object.keys(p.leds)) p.light(id, id === 'lfoAssign' ? ((t % 400) < 200 ? LED.white : null) : null);
     for (let i = 0; i < 5; i++) p.light(`lfo${i}`, d >= 0 && i === pr.lfoWaves[d] - 1 ? LED.white : null, 0.35 + 0.65 * wave);
-    // Every control with an LFO white with it, the one in focus brighter
-    // (also without an LFO yet, at its value); the others dark.
-    const pos = this.positions(), level = (x) => (x === d ? 1 : 0.45);
+    // Every control with an LFO white with it, the one in focus red (also
+    // without an LFO yet, at its value); the others dark.
+    const pos = this.positions(), color = (x) => (x === d ? LED.red : LED.white);
     for (const id of p.valueLights()) {
       if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, d); continue; }
       const c = this.destinationFor(id) ?? -1, on = this.lfoAssignedTo(c) || (c === d && d >= 0);
-      p.indicate(id, on ? clamp(pos[id] + this.lfoOffset(c), 0, 1) : 0, on ? LED.white : null, 0, level(c));
+      p.indicate(id, on ? clamp(pos[id] + this.lfoOffset(c), 0, 1) : 0, on ? color(c) : null);
     }
     // Bands and transpose show on their own LEDs.
     if (this.lfoAssignedTo(DEST.Bands) || d === DEST.Bands) {
@@ -467,12 +460,12 @@ export class Ui {
       const amount = 1 + Math.min(1, byte / 128) * 7, lowCut = byte > 128 ? (byte - 128) / 127 * 7 : 0;
       for (let i = 0; i < 8; i++) {
         const present = (i === 0 ? 1 : clamp(amount - i, 0, 1)) * clamp(i + 1 - lowCut, 0, 1);
-        p.light(`band${i}`, present ? LED.white : null, present * level(b));
+        p.light(`band${i}`, present ? color(b) : null, present);
       }
     }
     if (this.lfoAssignedTo(DEST.Transpose) || d === DEST.Transpose) {
       const tr = clamp(pr.articulationDegreeTranspose + Math.round(this.lfoOffset(DEST.Transpose) * 24), -12, 12);
-      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? LED.white : null, level(DEST.Transpose));
+      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? color(DEST.Transpose) : null);
     }
     // Red: white pads do not show on the light pads.
     for (let k = 0; k < KEYS; k++) p.padLight(k, k < list.length ? LED.red : null, list[k] === d ? 1 : 0.35);
