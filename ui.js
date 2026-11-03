@@ -440,19 +440,23 @@ export class Ui {
     ], list.includes(d) ? `${list.indexOf(d) + 1}/${list.length}` : 'new', back);
   }
 
+  // Value light of a control on the LFO page: every control with an LFO
+  // white with it, the one in focus red (also without an LFO yet, at its
+  // value); the others dark.
+  lfoEditLight(id, pos = this.positions()) {
+    const d = this.lfoTarget();
+    if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, d); return; }
+    const c = this.destinationFor(id) ?? -1, on = this.lfoAssignedTo(c) || (c === d && d >= 0);
+    this.panel.indicate(id, on ? clamp(pos[id] + this.lfoOffset(c), 0, 1) : 0, on ? (c === d ? LED.red : LED.white) : null);
+  }
+
   lfoEditLeds() {
     const p = this.panel, t = now(), pr = this.pr, list = this.lfoList(), d = this.lfoTarget();
     const wave = d >= 0 ? (this.state.status.lfoWaves?.[d] ?? 0) / 255 : 0;
     for (const id of Object.keys(p.leds)) p.light(id, id === 'lfoAssign' ? ((t % 400) < 200 ? LED.white : null) : null);
     for (let i = 0; i < 5; i++) p.light(`lfo${i}`, d >= 0 && i === pr.lfoWaves[d] - 1 ? LED.white : null, 0.35 + 0.65 * wave);
-    // Every control with an LFO white with it, the one in focus red (also
-    // without an LFO yet, at its value); the others dark.
     const pos = this.positions(), color = (x) => (x === d ? LED.red : LED.white);
-    for (const id of p.valueLights()) {
-      if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, d); continue; }
-      const c = this.destinationFor(id) ?? -1, on = this.lfoAssignedTo(c) || (c === d && d >= 0);
-      p.indicate(id, on ? clamp(pos[id] + this.lfoOffset(c), 0, 1) : 0, on ? color(c) : null);
-    }
+    for (const id of p.valueLights()) this.lfoEditLight(id, pos);
     // Bands and transpose show on their own LEDs.
     if (this.lfoAssignedTo(DEST.Bands) || d === DEST.Bands) {
       const b = DEST.Bands;
@@ -1036,7 +1040,7 @@ export class Ui {
       const v = lane.points[i][1];
       this.panel.set(id, v);
       this.control(id, v, true);
-      if (this.loopEdit) this.loopEditIndicate(id);
+      this.relight(id);
     }
   }
 
@@ -1165,28 +1169,30 @@ export class Ui {
     }, { back: () => this.openPage('analyser'), speed: (n) => this.loopSpeed(n) });
   }
 
-  // Value light of a control on the loop page: the chosen one blue at its
-  // value, the others dark. Also right after the loop moves a control, or
-  // the panel would show it yellow until the next frame.
+  // Value light of a control on the loop page: every control with a cycle
+  // white at its value, the chosen one blue (asked by the user, as red on
+  // the LFO page), the others dark. Also right after the loop moves a
+  // control, or the panel would show it yellow until the next frame.
   loopEditIndicate(id, pos = this.positions()) {
-    const sel = this.loopEditIds()[this.loopEdit.sel];
-    this.panel.indicate(id, id === sel ? pos[id] : 0, id === sel ? LED.blue : null);
+    const sel = this.loopEditIds()[this.loopEdit.sel], on = this.loop.lanes.has(id);
+    this.panel.indicate(id, on ? pos[id] : 0, on ? (id === sel ? LED.blue : LED.white) : null);
   }
 
   loopEditLeds() {
     const p = this.panel, t = now(), e = this.loopEdit, ids = this.loopEditIds();
     for (const id of Object.keys(p.leds)) p.light(id, id === 'loop' ? ((t % 400) < 200 ? LED.blue : null) : null);
-    // The chosen control steady blue, following its cycle; the transpose
-    // also on its 12 LEDs (+ from the bottom, - from the top).
-    const sel = ids[e.sel];
+    // Every control with a cycle white, following it, the chosen one blue;
+    // the transpose also on its 12 LEDs (+ from the bottom, - from the top)
+    // and the octave on its buttons.
+    const sel = ids[e.sel], color = (id) => (id === sel ? LED.blue : LED.white);
     const pos = this.positions();
     for (const id of p.valueLights()) this.loopEditIndicate(id, pos);
-    if (sel === 'transpose') {
+    if (this.loop.lanes.has('transpose')) {
       const tr = this.pr.articulationDegreeTranspose;
-      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? LED.blue : null);
+      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? color('transpose') : null);
     }
-    if (sel === 'octave') {
-      for (const [b, index] of Object.entries({ octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 })) p.light(b, this.pr.octaveIndex === index ? LED.blue : null);
+    if (this.loop.lanes.has('octave')) {
+      for (const [b, index] of Object.entries({ octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 })) p.light(b, this.pr.octaveIndex === index ? color('octave') : null);
     }
     for (let k = 0; k < KEYS; k++) p.padLight(k, k < ids.length ? LED.blue : null, k === e.sel ? 1 : 0.4);
   }
@@ -1289,6 +1295,34 @@ export class Ui {
     this.drawDisplay();
   }
 
+  // Rings and bars: yellow up to the value; amount and speed the LFO in
+  // focus (lfoPotIndicate); a control assigned to the LFO white at its
+  // value moved by its LFO; a control played by the loop blue; the three
+  // knobs by Δt red in the reverb bank.
+  valueLight(id, pos = this.positions()) {
+    if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, this.lfoTarget()); return; }
+    const d = this.destinationFor(id);
+    const assigned = this.lfoAssignedTo(d ?? -1);
+    const looped = this.loop.lanes.get(id)?.length > 0;
+    const reverb = this.reverbBank && (id === 'time' || id === 'spread' || id === 'diffuse');
+    const drone = id === 'transpose' && this.drone();
+    // With both a cycle and an LFO: white and blue in turn (asked by the user).
+    const color = assigned && looped ? ((now() % 1000) < 500 ? LED.white : LED.blue)
+      : assigned ? LED.white : looped ? LED.blue : reverb ? LED.red
+      : drone ? LED.violet : null;
+    this.panel.indicate(id, clamp(pos[id] + (assigned ? this.lfoOffset(d) : 0), 0, 1), color);
+  }
+
+  // The light of a control again right after it moved: the knob draws its
+  // plain value, which flickered against the light of its LFO (or loop page)
+  // until the next frame.
+  relight(id) {
+    if (!this.state) return;
+    if (this.loopEdit) this.loopEditIndicate(id);
+    else if (this.lfoEdit) this.lfoEditLight(id);
+    else this.valueLight(id);
+  }
+
   leds() {
     if (this.loopEdit) return this.loopEditLeds();
     if (this.lfoEdit) return this.lfoEditLeds();
@@ -1370,22 +1404,8 @@ export class Ui {
     const L = this.loopState();
     p.light('loop', L === 'armed' ? (blink(400) ? LED.orange : null) : L === 'recording' ? LED.red : L === 'playing' ? LED.blue : null);
 
-    // Rings and bars: yellow up to the value; amount and speed the LFO in
-    // focus (lfoPotIndicate); a control assigned to the LFO white at its
-    // value moved by its LFO; a control played by the loop blue; the three
-    // knobs by Δt red in the reverb bank.
     const pos = this.positions();
-    for (const id of p.valueLights()) {
-      const d = this.destinationFor(id);
-      if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, target); continue; }
-      const assigned = this.lfoAssignedTo(d ?? -1);
-      const looped = this.loop.lanes.get(id)?.length > 0;
-      const reverb = this.reverbBank && (id === 'time' || id === 'spread' || id === 'diffuse');
-      const drone = id === 'transpose' && this.drone();
-      const color = assigned ? LED.white : looped ? LED.blue : reverb ? LED.red
-        : drone ? LED.violet : null;
-      p.indicate(id, clamp(pos[id] + (assigned ? this.lfoOffset(d) : 0), 0, 1), color);
-    }
+    for (const id of p.valueLights()) this.valueLight(id, pos);
 
     // Pads: envelope level in yellow (red above 235); the notes of the arpeggio
     // dim turquoise (white did not show on the light pads).
