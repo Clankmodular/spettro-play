@@ -56,13 +56,16 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     this.engineRate = engineRate;
     this.stutter = { step: 0, sent: 0 };
     this.tapLights = this.lights.subarray(8, 16);
-    // Audio input for the External bank: summed to mono at the device rate,
-    // read at the engine rate (linear) into the engine's input block before
-    // each render. Primed with a block of silence, so the engine never reads
-    // past what has arrived.
+    // Audio input for the External bank: mid (L+R)/2 and side (L-R)/2 at the
+    // device rate, read at the engine rate (linear) into the engine's input
+    // blocks before each render (the bands take the side by their pan).
+    // Primed with a block of silence, so the engine never reads past what
+    // has arrived.
     this.inputBlock = new Float32Array(this.mem.buffer, e.spectrum_input(), this.blockFrames);
+    this.sideBlock = new Float32Array(this.mem.buffer, e.spectrum_input_side(), this.blockFrames);
     this.inStep = sampleRate / engineRate;
     this.inBuf = new Float32Array(8192);
+    this.sideBuf = new Float32Array(8192);
     this.inCount = Math.ceil(this.blockFrames * this.inStep) + 2;
     this.inPos = 0;
     // Load: time spent in process() against the audio time it produced,
@@ -167,24 +170,28 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   // This quantum of the audio input, mono (silence when none is connected).
   writeInput(channels, quantum) {
     if (this.inCount + quantum > this.inBuf.length) { this.inCount = 0; this.inPos = 0; }
-    const buf = this.inBuf, at = this.inCount, [a, b] = channels;
+    const buf = this.inBuf, side = this.sideBuf, at = this.inCount, [a, b] = channels;
     if (!a) buf.fill(0, at, at + quantum);
     else if (!b) buf.set(a, at);
     else for (let i = 0; i < quantum; i++) buf[at + i] = 0.5 * (a[i] + b[i]);
+    if (a && b) for (let i = 0; i < quantum; i++) side[at + i] = 0.5 * (a[i] - b[i]);
+    else side.fill(0, at, at + quantum);
     this.inCount += quantum;
   }
 
   // The engine's next input block at the engine rate.
   readInput(n) {
-    const buf = this.inBuf, dst = this.inputBlock;
+    const buf = this.inBuf, dst = this.inputBlock, side = this.sideBuf, sideDst = this.sideBlock;
     let pos = this.inPos;
     for (let i = 0; i < n; i++) {
-      const k = Math.floor(pos), x = pos - k;
-      dst[i] = k + 1 < this.inCount ? buf[k] + (buf[k + 1] - buf[k]) * x : 0;
+      const k = Math.floor(pos), x = pos - k, ok = k + 1 < this.inCount;
+      dst[i] = ok ? buf[k] + (buf[k + 1] - buf[k]) * x : 0;
+      sideDst[i] = ok ? side[k] + (side[k + 1] - side[k]) * x : 0;
       pos += this.inStep;
     }
     const drop = Math.min(Math.floor(pos), this.inCount);
     buf.copyWithin(0, drop, this.inCount);
+    side.copyWithin(0, drop, this.inCount);
     this.inCount -= drop;
     this.inPos = pos - drop;
   }
