@@ -120,11 +120,11 @@ export class Ui {
     this.bpmFlash = 0;
     // focus: the control whose LFO amount, speed and wave edit (assigning
     // or on the LFO page), -1 none.
-    this.lfoLearn = { learning: false, startedAt: 0, touched: false, drag: null, focus: -1 };
+    this.lfoLearn = { startedAt: 0, touched: false, focus: -1 };
     this.lfoEdit = null; // assign held: the LFO page, the assignments on the pads
     // Where the amount and speed knobs are, and whether they have reached
     // the value of the LFO in focus (pickup, as pots on the instrument).
-    this.lfoPots = { amount: { pos: 0, caught: false }, speed: { pos: 0.5, caught: false } };
+    this.lfoPots = { amount: { pos: 0.5, caught: false }, speed: { pos: 0.5, caught: false } };
     this.lfoTemplate = { wave: 1, speed: 128 }; // a new assignment starts as the last one edited
     this.loop = { armed: false, lanes: new Map(), completed: new Set(), taps: [], movedSinceTap: false };
     this.loopEdit = null; // rec held: the cycles on the pads (see loopEditPad)
@@ -188,10 +188,8 @@ export class Ui {
     // Amount and speed belong to the LFO in focus (not recorded in loops).
     if (id === 'amount' || id === 'speed') { if (!fromLoop) this.lfoPot(id, v); return; }
     if (!fromLoop) {
-      // On the LFO page a control is picked, not moved.
-      if (this.lfoEdit) { this.lfoEditTurn(id); return; }
-      // While assigning, controls do not move (wheel and double click included).
-      if (this.lfoLearn.learning) { this.lfoDragTo(id, v); return; }
+      // On the LFO page a control moves (its base) and comes into focus.
+      if (this.lfoEdit) this.lfoFocusControl(id);
       this.loopRecord(id, v);
     }
     const b = (x) => Math.round(x * 255), r = this.reverbBank;
@@ -236,68 +234,45 @@ export class Ui {
     }
   }
 
-  // ---- LFO assignment (lfo_assignment::Gesture) --------------------------
+  // ---- LFO assignment ---------------------------------------------------
 
-  // Web: while assign is lit, turning a knob or fader sets where the LFO
-  // takes it: from where it was (the start, where it goes back) to where it
-  // is let go (the end, up or down), shown as a white range. A touch
-  // without turning assigns the full way up, or picks a control already
-  // assigned. One LFO per control (3 November): the control touched comes
-  // into focus and amount, speed and the wave button then edit its own LFO.
+  // Web, one LFO per control (3 November, as asked by the user): on the LFO
+  // page (assign) a control touched or turned comes into focus and keeps
+  // working as usual (it sets the base). Amount, speed and the wave button
+  // then edit its own LFO: amount is bipolar, the middle is off, to the
+  // right the LFO takes the control up from its base, to the left down.
+  // A control with its amount at the middle has no LFO.
   touchControl(id) {
     if (id === 'amount' || id === 'speed') return false;
-    if (this.lfoEdit) { this.lfoEditTurn(id); return true; } // picked, not turned
-    const l = this.lfoLearn;
-    if (!l.learning) return false;
-    const d = this.destinationFor(id);
-    if (d === undefined) return true;
-    l.drag = { id, d, start: this.positions()[id], end: null };
-    return false; // the knob turns, but only to show the end
-  }
-
-  lfoDragTo(id, v) {
-    const l = this.lfoLearn, d = this.destinationFor(id);
-    if (d === undefined) { this.syncPanel(); return; }
-    // The wheel turns without a touch: it ends by itself after a pause.
-    if (!l.drag || l.drag.id !== id) l.drag = { id, d, start: this.positions()[id], end: null, wheel: true };
-    l.drag.end = v;
-    if (l.drag.wheel) { clearTimeout(l.drag.timer); l.drag.timer = setTimeout(() => this.touchEnd(id), 700); }
-    // The knob just redrew its ring in yellow: back to the white range now,
-    // not at the next frame (it flickered).
-    this.panel.indicate(id, v, LED.white, l.drag.start);
-    const depth = Math.round((v - l.drag.start) * 255);
-    this.display.show(`LFO ${LFO_LABEL[d] || ''} ${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%`, 700);
-  }
-
-  touchEnd(id) {
-    const l = this.lfoLearn, g = l.drag;
-    if (!l.learning || !g || g.id !== id) return;
-    l.drag = null; l.touched = true;
-    clearTimeout(g.timer);
-    const pr = this.pr, depths = pr.lfoDepth.slice(), mask = pr.lfoAssigned.slice();
-    const bit = 1 << (g.d & 7), assigned = !!(mask[g.d >> 3] & bit);
-    let depth = g.end === null ? (assigned ? depths[g.d] : 255) : Math.round((g.end - g.start) * 255);
-    if (Math.abs(depth) < 3) depth = 0;
-    depths[g.d] = depth;
-    if (depth) mask[g.d >> 3] |= bit; else mask[g.d >> 3] &= ~bit;
-    const values = { lfoDepth: depths, lfoAssigned: mask };
-    // A new assignment: wave and speed of the last LFO edited, full amount.
-    if (depth && !assigned) {
-      const at = (field, v) => { const a = pr[field].slice(); a[g.d] = v; values[field] = a; };
-      at('lfoWaves', this.lfoTemplate.wave); at('lfoSpeeds', this.lfoTemplate.speed); at('lfoAmounts', 255);
-    }
-    this.set(values);
-    this.setLfoFocus(depth ? g.d : -1);
-    this.panel.set(id, g.start); // back to the start
-    if (this.state) this.leds();  // its light at once, not yellow until the next frame
-    this.display.show(depth ? `LFO ${LFO_LABEL[g.d] || ''} ${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%` : `LFO ${LFO_LABEL[g.d] || ''}: off`, 1000);
+    if (this.lfoEdit) this.lfoFocusControl(id);
+    return false;
   }
 
   lfoAssignedTo(d) { return d >= 0 && (this.pr.lfoAssigned[d >> 3] & (1 << (d & 7))) !== 0; }
   lfoList() { return LFO_ORDER.filter((d) => this.lfoAssignedTo(d)); }
-  // The LFO that amount, speed and wave edit: the one in focus while
-  // assigning or on the LFO page; none otherwise (their lights go out).
-  lfoTarget() { return (this.lfoEdit || this.lfoLearn.learning) && this.lfoAssignedTo(this.lfoLearn.focus) ? this.lfoLearn.focus : -1; }
+  // The LFO that amount, speed and wave edit: on the LFO page the control
+  // in focus (with or without an LFO yet); none otherwise (their lights go
+  // out).
+  lfoTarget() {
+    const d = this.lfoLearn.focus;
+    return this.lfoEdit && d in LFO_CONTROL ? d : -1;
+  }
+
+  // On the LFO page: the control touched or turned comes into focus. One
+  // without an LFO takes the wave and speed of the last LFO edited.
+  lfoFocusControl(id) {
+    const d = this.destinationFor(id);
+    this.lfoLearn.touched = true;
+    if (d === undefined || !(d in LFO_CONTROL) || d === this.lfoLearn.focus) return;
+    if (!this.lfoAssignedTo(d)) {
+      const waves = this.pr.lfoWaves.slice(), speeds = this.pr.lfoSpeeds.slice();
+      waves[d] = this.lfoTemplate.wave; speeds[d] = this.lfoTemplate.speed;
+      this.set({ lfoWaves: waves, lfoSpeeds: speeds });
+    }
+    this.setLfoFocus(d);
+    const depth = this.pr.lfoDepth[d];
+    this.display.show(`LFO ${LFO_LABEL[d] || ''} ${depth ? `${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%` : 'off'}`, 900);
+  }
 
   setLfoFocus(d) {
     this.lfoLearn.focus = d;
@@ -306,20 +281,31 @@ export class Ui {
     this.send('prop', { values: { lfoFocus: d } }); // sent in every SPI frame
   }
 
+  // Where amount and speed stand for an LFO, 0..1: amount from the middle
+  // (its depth, -255..255), speed its control.
+  lfoPotValue(id, d) {
+    return id === 'amount' ? 0.5 + (this.pr.lfoDepth[d] || 0) / 510 : this.pr.lfoSpeeds[d] / 255;
+  }
+
   // A pot already where the value is has caught it.
   lfoCatch() {
     const d = this.lfoTarget();
     if (d < 0) return;
-    for (const [id, P] of Object.entries(this.lfoPots)) {
-      const stored = this.pr[id === 'amount' ? 'lfoAmounts' : 'lfoSpeeds'][d] / 255;
-      if (Math.abs(P.pos - stored) <= 2 / 255) P.caught = true;
-    }
+    for (const [id, P] of Object.entries(this.lfoPots)) if (Math.abs(P.pos - this.lfoPotValue(id, d)) <= 2 / 255) P.caught = true;
   }
 
   setLfoField(field, d, v) {
     const a = this.pr[field].slice();
     a[d] = v;
     this.set({ [field]: a });
+  }
+
+  // Depth of a control's LFO, -255..255; 0 takes the LFO away.
+  setLfoDepth(d, depth) {
+    const depths = this.pr.lfoDepth.slice(), mask = this.pr.lfoAssigned.slice(), bit = 1 << (d & 7);
+    depths[d] = depth;
+    if (depth) mask[d >> 3] |= bit; else mask[d >> 3] &= ~bit;
+    this.set({ lfoDepth: depths, lfoAssigned: mask });
   }
 
   // Amount and speed knobs: pickup. The knob turns, the value of the LFO in
@@ -329,62 +315,71 @@ export class Ui {
     P.pos = v;
     const d = this.lfoTarget();
     if (d < 0) { this.lfoPotIndicate(id, d); return; }
-    const field = id === 'amount' ? 'lfoAmounts' : 'lfoSpeeds', stored = this.pr[field][d] / 255;
+    const stored = this.lfoPotValue(id, d);
     if (!P.caught && Math.abs(v - stored) > 2 / 255 && (from - stored) * (v - stored) > 0) {
+      this.display.show(`LFO ${LFO_LABEL[d] || ''}: turn ${v < stored ? 'up' : 'down'} to pick up`, 700);
       this.lfoPotIndicate(id, d);
       return;
     }
     P.caught = true;
-    const value = Math.round(v * 255);
-    if (value !== this.pr[field][d]) {
-      this.setLfoField(field, d, value);
-      if (id === 'speed') this.lfoTemplate.speed = value;
-      this.display.show(id === 'amount' ? `LFO ${LFO_LABEL[d] || ''} amount ${Math.round(value / 2.55)}%`
-        : `LFO ${LFO_LABEL[d] || ''} ${LFO_SPEEDS[lfoSpeedIndex(value)]}`, 700);
+    if (id === 'amount') {
+      let depth = Math.round((v - 0.5) * 510);
+      if (Math.abs(depth) < 4) depth = 0; // the middle: off
+      depth = clamp(depth, -255, 255);
+      if (depth !== this.pr.lfoDepth[d]) {
+        this.setLfoDepth(d, depth);
+        this.display.show(`LFO ${LFO_LABEL[d] || ''} ${depth ? `${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%` : 'off'}`, 700);
+      }
+    } else {
+      const value = Math.round(v * 255);
+      if (value !== this.pr.lfoSpeeds[d]) {
+        this.setLfoField('lfoSpeeds', d, value);
+        this.lfoTemplate.speed = value;
+        this.display.show(`LFO ${LFO_LABEL[d] || ''} ${LFO_SPEEDS[lfoSpeedIndex(value)]}`, 700);
+      }
     }
     this.lfoPotIndicate(id, d);
   }
 
-  // Ring of amount or speed: the value of the LFO in focus in white (amount
-  // brightening with its wave); blinking while the knob has not reached it;
-  // dark with no LFO in focus.
+  // Ring of amount or speed: the value of the LFO in focus in white, amount
+  // from the middle (up or down) and brightening with its wave; blinking
+  // while the knob has not reached it; dark with no LFO in focus.
   lfoPotIndicate(id, d) {
     if (d < 0) { this.panel.indicate(id, 0, null); return; }
-    const P = this.lfoPots[id], stored = this.pr[id === 'amount' ? 'lfoAmounts' : 'lfoSpeeds'][d] / 255;
+    const P = this.lfoPots[id], stored = this.lfoPotValue(id, d);
     const wave = (this.state?.status.lfoWaves?.[d] ?? 0) / 255;
     const level = !P.caught ? ((now() % 400) < 200 ? 1 : 0.25) : id === 'amount' ? 0.3 + 0.7 * wave : 1;
-    this.panel.indicate(id, stored, LED.white, 0, level);
+    this.panel.indicate(id, stored, LED.white, id === 'amount' ? 0.5 : 0, level);
   }
 
   lfoWaveButton() {
     const d = this.lfoTarget();
-    if (d < 0) return this.display.show(this.lfoLearn.learning ? 'LFO: pick a control' : 'LFO: assign first', 900);
+    if (d < 0) return this.display.show(this.lfoEdit ? 'LFO: touch a control' : 'LFO: press assign', 900);
     const wave = this.pr.lfoWaves[d] >= 5 ? 1 : this.pr.lfoWaves[d] + 1;
     this.setLfoField('lfoWaves', d, wave);
     this.lfoTemplate.wave = wave;
     this.display.show(`LFO ${LFO_LABEL[d] || ''} ${LFO_WAVES[wave - 1]}`, 700);
   }
 
-  // Where the LFO moves a destination now, in panel units: its own depth
-  // and amount times its own wave (as lfoShown() in the controller).
+  // Where the LFO moves a destination now, in panel units: its depth times
+  // its own wave (as lfoShown() in the controller).
   lfoOffset(d) {
-    const pr = this.pr;
     if (!this.lfoAssignedTo(d)) return 0;
-    const depth = Math.round((pr.lfoDepth?.[d] ?? 255) * (pr.lfoAmounts?.[d] ?? 255) / 255);
-    return depth / 255 * ((this.state?.status.lfoWaves?.[d] ?? 0) / 255);
+    return (this.pr.lfoDepth?.[d] ?? 0) / 255 * ((this.state?.status.lfoWaves?.[d] ?? 0) / 255);
   }
 
-  // ---- LFO page (web): assign held 500 ms. Every LED goes dark but assign
-  // (blinking white); the pads show the assignments in panel order, red. A
-  // pad, or a touch on an assigned control, picks one: its control white
-  // with its LFO, amount, speed and the wave LEDs show and edit its LFO
-  // (pickup), the screen shows wave, speed, depth and amount (arrows: the
-  // encoder on the instrument). A double tap on a pad removes it. A tap on
-  // assign or any other button but wave leaves.
+  // ---- LFO page (web, assign; one page for assigning and editing, asked
+  // by the user): the other LEDs go dark but assign (blinking white); the
+  // pads show the assignments in panel order, red, and every control with
+  // an LFO is lit white with it. A pad, or a control touched or turned,
+  // comes into focus (a control without an LFO becomes a new one as soon as
+  // amount leaves the middle): amount, speed and the wave LEDs show and
+  // edit its LFO (pickup), the screen shows wave, speed and amount (arrows:
+  // the encoder on the instrument). A double tap on a pad removes it. A tap
+  // on assign or any other button but wave leaves.
 
   openLfoEdit() {
     const l = this.lfoLearn, list = this.lfoList();
-    l.learning = false; l.drag = null;
     this.openPage('lfos');
     this.lfoEdit = { lastPad: -1, lastTap: 0 };
     this.lfoSelect(list.includes(l.focus) ? l.focus : list[0] ?? -1);
@@ -404,6 +399,7 @@ export class Ui {
     const e = this.lfoEdit, list = this.lfoList(), t = now();
     if (index >= list.length) return;
     const d = list[index];
+    this.lfoLearn.touched = true;
     if (e.lastPad === index && t - e.lastTap < 320) {
       const mask = this.pr.lfoAssigned.slice(), depths = this.pr.lfoDepth.slice();
       mask[d >> 3] &= ~(1 << (d & 7)); depths[d] = 0;
@@ -418,14 +414,6 @@ export class Ui {
     this.lfoSelect(d);
   }
 
-  // A control touched or turned on the LFO page: picked if assigned; it
-  // does not move.
-  lfoEditTurn(id) {
-    const d = this.destinationFor(id);
-    if (this.lfoAssignedTo(d ?? -1)) this.lfoSelect(d);
-    this.panel.set(id, this.positions()[id]);
-  }
-
   // Screen arrows (the encoder on the instrument) also edit the LFO.
   lfoEditStep(field, n) {
     const d = this.lfoTarget(), pr = this.pr, s = Math.sign(n);
@@ -438,12 +426,10 @@ export class Ui {
       this.setLfoField('lfoSpeeds', d, speed); this.lfoTemplate.speed = speed;
       this.lfoPots.speed.caught = false; this.lfoCatch();
     } else if (field === 'amount') {
-      this.setLfoField('lfoAmounts', d, clamp(pr.lfoAmounts[d] + 5 * s, 0, 255));
-      this.lfoPots.amount.caught = false; this.lfoCatch();
-    } else if (field === 'depth') {
       let depth = clamp(pr.lfoDepth[d] + 5 * s, -255, 255);
       if (depth === 0) depth = 5 * s; // stays assigned; a double tap on its pad removes it
-      this.setLfoField('lfoDepth', d, depth);
+      this.setLfoDepth(d, depth);
+      this.lfoPots.amount.caught = false; this.lfoCatch();
     }
   }
 
@@ -451,15 +437,14 @@ export class Ui {
     const pr = this.pr, d = this.lfoTarget(), list = this.lfoList();
     const m = this.menus.lfos || (this.menus.lfos = { row: 0 });
     const back = () => this.openPage('analyser');
-    if (d < 0) return P.drawListPage(ctx, 'LFO', m, [['assigned', 'none']], '', back);
+    if (d < 0) return P.drawListPage(ctx, 'LFO', m, [['touch a control', '']], `${list.length}`, back);
     const s = (field) => ({ step: (n) => this.lfoEditStep(field, n) });
-    const depth = pr.lfoDepth[d], percent = (v) => `${Math.round(v / 2.55)}%`;
+    const depth = pr.lfoDepth[d];
     return P.drawListPage(ctx, LFO_LABEL[d] || 'LFO', m, [
       ['wave', LFO_WAVES[pr.lfoWaves[d] - 1] || 'sine', s('wave')],
       ['speed', LFO_SPEEDS[lfoSpeedIndex(pr.lfoSpeeds[d])], s('speed')],
-      ['depth', `${depth > 0 ? '+' : ''}${percent(depth)}`, s('depth')],
-      ['amount', percent(pr.lfoAmounts[d]), s('amount')],
-    ], `${list.indexOf(d) + 1}/${list.length}`, back);
+      ['amount', `${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%`, s('amount')],
+    ], list.includes(d) ? `${list.indexOf(d) + 1}/${list.length}` : 'new', back);
   }
 
   lfoEditLeds() {
@@ -467,23 +452,27 @@ export class Ui {
     const wave = d >= 0 ? (this.state.status.lfoWaves?.[d] ?? 0) / 255 : 0;
     for (const id of Object.keys(p.leds)) p.light(id, id === 'lfoAssign' ? ((t % 400) < 200 ? LED.white : null) : null);
     for (let i = 0; i < 5; i++) p.light(`lfo${i}`, d >= 0 && i === pr.lfoWaves[d] - 1 ? LED.white : null, 0.35 + 0.65 * wave);
-    const sel = d >= 0 ? LFO_CONTROL[d] : null, pos = this.positions();
+    // Every control with an LFO white with it, the one in focus brighter
+    // (also without an LFO yet, at its value); the others dark.
+    const pos = this.positions(), level = (x) => (x === d ? 1 : 0.45);
     for (const id of p.valueLights()) {
       if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, d); continue; }
-      p.indicate(id, id === sel ? clamp(pos[id] + this.lfoOffset(d), 0, 1) : 0, id === sel ? LED.white : null);
+      const c = this.destinationFor(id) ?? -1, on = this.lfoAssignedTo(c) || (c === d && d >= 0);
+      p.indicate(id, on ? clamp(pos[id] + this.lfoOffset(c), 0, 1) : 0, on ? LED.white : null, 0, level(c));
     }
     // Bands and transpose show on their own LEDs.
-    if (d === DEST.Bands) {
-      const byte = clamp(Math.round(pr.spectralBands + this.lfoOffset(d) * 255), 0, 255);
+    if (this.lfoAssignedTo(DEST.Bands) || d === DEST.Bands) {
+      const b = DEST.Bands;
+      const byte = clamp(Math.round(pr.spectralBands + this.lfoOffset(b) * 255), 0, 255);
       const amount = 1 + Math.min(1, byte / 128) * 7, lowCut = byte > 128 ? (byte - 128) / 127 * 7 : 0;
       for (let i = 0; i < 8; i++) {
         const present = (i === 0 ? 1 : clamp(amount - i, 0, 1)) * clamp(i + 1 - lowCut, 0, 1);
-        p.light(`band${i}`, present ? LED.white : null, present);
+        p.light(`band${i}`, present ? LED.white : null, present * level(b));
       }
     }
-    if (d === DEST.Transpose) {
-      const tr = clamp(pr.articulationDegreeTranspose + Math.round(this.lfoOffset(d) * 24), -12, 12);
-      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? LED.white : null);
+    if (this.lfoAssignedTo(DEST.Transpose) || d === DEST.Transpose) {
+      const tr = clamp(pr.articulationDegreeTranspose + Math.round(this.lfoOffset(DEST.Transpose) * 24), -12, 12);
+      for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? LED.white : null, level(DEST.Transpose));
     }
     // Red: white pads do not show on the light pads.
     for (let k = 0; k < KEYS; k++) p.padLight(k, k < list.length ? LED.red : null, list[k] === d ? 1 : 0.35);
@@ -540,7 +529,7 @@ export class Ui {
         if (b.consumed) return;
         if (this.page === 'loops') return this.openPage('analyser');
         return this.loopButton();
-      case 'lfoAssign': return this.lfoButton(down, b);
+      case 'lfoAssign': return this.lfoButton(down);
       case 'lfoWave':
         if (!down) return;
         return this.lfoWaveButton();
@@ -620,25 +609,18 @@ export class Ui {
     if (page === 'preset') this.presetSnapshot = this.snapshot();
   }
 
-  // Web gesture: a tap on assign starts assigning (LED blinking red) and
-  // touches on knobs and faders assign them (see touchControl); the next
-  // tap ends, and amount, speed and wave go dark. A second tap within
-  // 400 ms, with nothing touched, clears every destination. Held 500 ms:
-  // the LFO page (taps act on release, so a hold is not also a tap).
-  lfoButton(down, b) {
-    if (down) { b.timer = setTimeout(() => { b.consumed = true; this.openLfoEdit(); }, 500); return; }
-    clearTimeout(b.timer);
-    if (b.consumed) return;
-    if (this.lfoEdit) return this.openPage('analyser');
+  // Web gesture: a tap on assign opens the LFO page (openLfoEdit), the
+  // next one closes it, and amount, speed and wave go dark. A second tap
+  // within 400 ms, with nothing touched, clears every destination.
+  lfoButton(down) {
+    if (!down) return;
     const l = this.lfoLearn, t = now();
-    if (!l.learning) {
-      l.learning = true; l.startedAt = t; l.touched = false;
-      this.setLfoFocus(-1);
-      this.display.show('LFO assign', 900);
+    if (!this.lfoEdit) {
+      l.startedAt = t; l.touched = false;
+      this.openLfoEdit();
       return;
     }
-    l.learning = false;
-    this.setLfoFocus(-1);
+    this.openPage('analyser');
     if (t - l.startedAt < 400 && !l.touched) {
       this.set({ lfoAssigned: new Uint8Array(7), lfoDepth: new Array(56).fill(0) });
       this.display.show('LFO: all cleared', 1000);
@@ -1361,8 +1343,8 @@ export class Ui {
     const target = this.lfoTarget(), targetWave = target >= 0 ? (status.lfoWaves?.[target] ?? 0) / 255 : 0;
     for (let i = 0; i < 5; i++) p.light(`lfo${i}`, target >= 0 && i === pr.lfoWaves[target] - 1 ? LED.white : null, 0.35 + 0.65 * targetWave);
     const anyLfo = pr.lfoAssigned.some((b) => b);
-    // Assign: red only while assigning, white when anything is assigned.
-    p.light('lfoAssign', this.lfoLearn.learning ? (blink(300) ? LED.red : null) : anyLfo ? LED.white : null);
+    // Assign: white when anything is assigned (blinking on the LFO page).
+    p.light('lfoAssign', anyLfo ? LED.white : null);
     p.light('mode', MODE_COLORS[pr.spectralMode]);
     p.light('bank', { 0: LED.white, 1: LED.green, 2: LED.red, 3: LED.blue, 4: LED.orange }[pr.oscBank]);
     const delayMs = (reply[29] << 8) | reply[30];
@@ -1397,14 +1379,11 @@ export class Ui {
 
     // Rings and bars: yellow up to the value; amount and speed the LFO in
     // focus (lfoPotIndicate); a control assigned to the LFO white at its
-    // value moved by its LFO (while assigning, the others dimmer than the
-    // one in focus); while its end is being set, the white range from start
-    // to end; a control played by the loop blue; the three knobs by Δt red
-    // in the reverb bank.
-    const pos = this.positions(), drag = this.lfoLearn.drag;
+    // value moved by its LFO; a control played by the loop blue; the three
+    // knobs by Δt red in the reverb bank.
+    const pos = this.positions();
     for (const id of p.valueLights()) {
       const d = this.destinationFor(id);
-      if (drag?.id === id && drag.end !== null) { p.indicate(id, drag.end, LED.white, drag.start); continue; }
       if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, target); continue; }
       const assigned = this.lfoAssignedTo(d ?? -1);
       const looped = this.loop.lanes.get(id)?.length > 0;
@@ -1412,8 +1391,7 @@ export class Ui {
       const drone = id === 'transpose' && this.drone();
       const color = assigned ? LED.white : looped ? LED.blue : reverb ? LED.red
         : drone ? LED.violet : null;
-      const dim = assigned && this.lfoLearn.learning && target >= 0 && d !== target;
-      p.indicate(id, clamp(pos[id] + (assigned ? this.lfoOffset(d) : 0), 0, 1), color, 0, dim ? 0.45 : 1);
+      p.indicate(id, clamp(pos[id] + (assigned ? this.lfoOffset(d) : 0), 0, 1), color);
     }
 
     // Pads: envelope level in yellow (red above 235); the notes of the arpeggio

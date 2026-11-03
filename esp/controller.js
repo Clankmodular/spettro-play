@@ -70,12 +70,11 @@ export function defaultPreset() {
     fxMix: 0.5, // web: dry/effects, 0.5 = both at unity
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
-    // Web: depth of each destination (-255..255, control units from the
-    // control's own value).
-    lfoDepth: new Array(56).fill(0),
-    // Web: one LFO per control (3 November): its own wave (1..5), speed
-    // (0..255, lfo_clock choices) and amount (0..255, scales its depth).
-    lfoWaves: new Array(56).fill(1), lfoSpeeds: new Array(56).fill(128), lfoAmounts: new Array(56).fill(255),
+    // Web: one LFO per control (3 November): its amount, bipolar
+    // (-255..255, control units from the control's own value, the arrival
+    // of its LFO; 0 none), its wave (1..5) and speed (0..255, lfo_clock).
+    lfoDepth: new Array(56).fill(0), lfoAmountInDepth: true,
+    lfoWaves: new Array(56).fill(1), lfoSpeeds: new Array(56).fill(128),
     // Web: per-pad rules of the arpeggio (set on a held pad with the latched
     // arpeggio): { [key]: { play: [x, y], acc, limit, mode } }, see arpRule.
     arpRules: {},
@@ -96,12 +95,24 @@ export function migratePreset(pr) {
 }
 
 // Web: one LFO per control (3 November). Older presets had one LFO for every
-// assignment: each control gets its wave, speed and amount, so they sound
-// the same (each control now runs its own copy, all in step on the clock).
+// assignment: each control gets its wave and speed, and the amount goes into
+// its depth (now the bipolar amount of each control), so they sound the
+// same (each control now runs its own copy, all in step on the clock).
+// Presets of the first version of the day kept a separate amount per
+// control (lfoAmounts): it goes into the depth too.
 function withLfoPerControl(pr) {
-  if (Array.isArray(pr.lfoWaves) && pr.lfoWaves.length === 56) return pr;
-  return { ...pr, lfoWaves: new Array(56).fill(pr.lfoWave ?? 1), lfoSpeeds: new Array(56).fill(pr.lfoSpeed ?? 5),
-    lfoAmounts: new Array(56).fill(pr.lfoAmount ?? 0) };
+  if (pr.lfoAmountInDepth) return pr;
+  const perControl = Array.isArray(pr.lfoWaves) && pr.lfoWaves.length === 56;
+  const amounts = perControl ? (pr.lfoAmounts || []) : new Array(56).fill(pr.lfoAmount ?? 0);
+  const mask = Array.from(pr.lfoAssigned || []), depths = Array.from(pr.lfoDepth || new Array(56).fill(0));
+  for (let d = 0; d < 56; d++) {
+    depths[d] = Math.round((depths[d] || 0) * (amounts[d] ?? 255) / 255);
+    if (!depths[d] && mask.length > d >> 3) mask[d >> 3] &= ~(1 << (d & 7));
+  }
+  const { lfoAmounts, ...rest } = pr;
+  return { ...rest, lfoAssigned: mask, lfoDepth: depths, lfoAmountInDepth: true,
+    lfoWaves: perControl ? pr.lfoWaves : new Array(56).fill(pr.lfoWave ?? 1),
+    lfoSpeeds: perControl ? pr.lfoSpeeds : new Array(56).fill(pr.lfoSpeed ?? 5) };
 }
 
 // Web: the LFO no longer goes on the octave (asked by the user); presets
@@ -860,11 +871,11 @@ export class Controller {
 
   // Web: one LFO per control, run by the Daisy (lfo_bank.h of the engine) from the
   // frame bytes 96-112. Each assigned control moves from its value by its
-  // own signed depth scaled by its own amount, times its own wave.
+  // own bipolar amount (lfoDepth) times its own wave.
   lfoDepthOf(d) {
     const pr = this.pr, mask = pr.lfoAssigned;
     if (!SUPPORTED.has(d) || !(mask[d >> 3] & (1 << (d & 7)))) return 0;
-    return Math.round((pr.lfoDepth?.[d] ?? 255) * (pr.lfoAmounts?.[d] ?? 255) / 255);
+    return clamp(Math.round(pr.lfoDepth?.[d] ?? 0), -255, 255);
   }
 
   // Where the LFO moves a control now (control units), for the display.
