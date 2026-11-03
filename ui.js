@@ -189,8 +189,13 @@ export class Ui {
     // Amount and speed belong to the LFO in focus (not recorded in loops).
     if (id === 'amount' || id === 'speed') { if (!fromLoop) this.lfoPot(id, v); return; }
     if (!fromLoop) {
-      // On the LFO page a control moves (its base) and comes into focus.
-      if (this.lfoEdit) this.lfoFocusControl(id);
+      // On the LFO page a control moves (its base) and comes into focus;
+      // one played by a loop is only picked, so it keeps its cycle (moving
+      // a control by hand deletes its cycle, see loopRecord).
+      if (this.lfoEdit) {
+        this.lfoFocusControl(id);
+        if (this.loop.lanes.has(id)) { this.panel.set(id, this.positions()[id]); return; }
+      }
       this.loopRecord(id, v);
     }
     const b = (x) => Math.round(x * 255), r = this.reverbBank;
@@ -242,11 +247,12 @@ export class Ui {
   // working as usual (it sets the base). Amount, speed and the wave button
   // then edit its own LFO: amount is bipolar, the middle is off, to the
   // right the LFO takes the control up from its base, to the left down.
-  // A control with its amount at the middle has no LFO.
+  // A control with its amount at the middle has no LFO. One played by a
+  // loop does not turn on the page: it keeps its cycle.
   touchControl(id) {
-    if (id === 'amount' || id === 'speed') return false;
-    if (this.lfoEdit) this.lfoFocusControl(id);
-    return false;
+    if (id === 'amount' || id === 'speed' || !this.lfoEdit) return false;
+    this.lfoFocusControl(id);
+    return this.loop.lanes.has(id);
   }
 
   lfoAssignedTo(d) { return d >= 0 && (this.pr.lfoAssigned[d >> 3] & (1 << (d & 7))) !== 0; }
@@ -260,7 +266,8 @@ export class Ui {
   }
 
   // On the LFO page: the control touched or turned comes into focus. One
-  // without an LFO takes the wave and speed of the last LFO edited.
+  // without an LFO gets one at once, amount +100% (asked by the user), with
+  // the wave and speed of the last LFO edited.
   lfoFocusControl(id) {
     const d = this.destinationFor(id);
     this.lfoLearn.touched = true;
@@ -269,6 +276,7 @@ export class Ui {
       const waves = this.pr.lfoWaves.slice(), speeds = this.pr.lfoSpeeds.slice();
       waves[d] = this.lfoTemplate.wave; speeds[d] = this.lfoTemplate.speed;
       this.set({ lfoWaves: waves, lfoSpeeds: speeds });
+      this.setLfoDepth(d, 255);
     }
     this.setLfoFocus(d);
     const depth = this.pr.lfoDepth[d];
@@ -621,7 +629,7 @@ export class Ui {
     if (t - l.startedAt < 400 && !l.touched) {
       this.set({ lfoAssigned: new Uint8Array(7), lfoDepth: new Array(56).fill(0) });
       this.display.show('LFO: all cleared', 1000);
-    } else this.display.show('LFO assign off', 700);
+    }
   }
 
   tapTempo(t) {
