@@ -150,13 +150,22 @@
       <section>
         <h2>LFO</h2>
         <ul>
-          <li><b>amount</b> and <b>speed</b>; the <b>wave</b> button cycles triangle, ramp down, ramp up, square, random (five LEDs).
-            Amount is the master of every assignment: its ring is dim over its whole travel and brightens with the wave.</li>
-          <li><b>◐ assign</b> — tap: the LED blinks red; now turn a knob or fader to where the LFO should take it, up or down:
+          <li>Every control has <b>its own LFO</b>, always in time with the clock: speed goes from /16 to X16 of the beat.
+            <b>amount</b>, <b>speed</b> and the <b>wave</b> button (triangle, ramp down, ramp up, square, random; five LEDs)
+            edit the LFO of the control in focus, and are dark when there is none.</li>
+          <li><b>◐ assign</b> — tap: the LED blinks red; now turn a knob or fader to where its LFO should take it, up or down:
             where it was is the start, where you let go is the end, shown as a white range while you turn; the control
-            goes back to the start. A click without turning takes the LFO away (or, if it had none, gives it the full way up).
+            goes back to the start and comes into focus. A click without turning brings an assigned control into focus
+            (or, if it had none, gives it the full way up). A new LFO starts with the wave and speed of the last one edited.
+            Turning it back to its start takes the LFO away.
             Tap ◐ again to finish. Two quick taps without assigning clear every assignment.
-            A modulated control shows its value moved by the LFO in white (bands: the band LEDs).</li>
+            A modulated control shows its value moved by its LFO in white (bands: the band LEDs).</li>
+          <li><b>Pickup</b>: as on the instrument, amount and speed keep where they are when the focus moves; their ring shows
+            the value of the control in focus, blinking until the knob reaches it, then the knob takes it over.</li>
+          <li><b>◐ held</b>: the LFO page. Every light goes dark; the pads show the assigned controls in red. A pad, or a
+            touch on an assigned control, brings it into focus (its control lights white): amount, speed, wave and the screen
+            (wave, speed, depth, amount) show and edit its LFO. A double tap on a pad takes its LFO away. ◐ or any other
+            button but wave leaves.</li>
         </ul>
       </section>
 

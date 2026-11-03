@@ -34,10 +34,18 @@ export const IMAGE = 49151.25;
 // first the plain drone, then repeats from slow to fast (length in beats).
 export const STUTTER = [['drone', 0], ['1/2', 2], ['1/4.', 1.5], ['1/4', 1], ['1/8.', 0.75], ['1/4T', 2 / 3],
   ['1/8', 0.5], ['1/8T', 1 / 3], ['1/16', 0.25], ['1/16T', 1 / 6], ['1/32', 0.125], ['1/64', 0.0625]];
-const SUPPORTED = new Set([DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
+const LFO_DESTINATIONS = [DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
   DEST.Width, DEST.DelayTime, DEST.Feedback, DEST.Dispersion, DEST.OscWave, DEST.SubWave,
   DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Transpose, DEST.Tune,
-  DEST.ReverbSize, DEST.ReverbDetail, DEST.DelayFeedback]);
+  DEST.ReverbSize, DEST.ReverbDetail, DEST.DelayFeedback];
+const SUPPORTED = new Set(LFO_DESTINATIONS);
+// One LFO per control (lfo_bank.h of the engine, on the Daisy): these the Daisy
+// does not apply; the controller moves them with the wave the engine reports,
+// as the ESP32 would with its own copy of the bank.
+const LFO_HERE = new Set([DEST.Attack, DEST.Release, DEST.Transpose, DEST.Tune, DEST.Master]);
+// lfo_clock::Index: the 15 speed choices (/16 .. X16) of a speed control.
+export const lfoSpeedIndex = (c) => (c < 128 ? (c * 7) >> 7 : 7 + (((c - 128) * 8) >> 7));
+export const LFO_SPEEDS = ['/16', '/8', '/6', '/4', '/3', '/2', '/1.5', 'X1', 'X1.5', 'X2', 'X3', 'X4', 'X6', 'X8', 'X16'];
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -63,8 +71,11 @@ export function defaultPreset() {
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
     // Web: depth of each destination (-255..255, control units from the
-    // control's own value); the amount knob scales them all.
+    // control's own value).
     lfoDepth: new Array(56).fill(0),
+    // Web: one LFO per control (3 November): its own wave (1..5), speed
+    // (0..255, lfo_clock choices) and amount (0..255, scales its depth).
+    lfoWaves: new Array(56).fill(1), lfoSpeeds: new Array(56).fill(128), lfoAmounts: new Array(56).fill(255),
     // Web: per-pad rules of the arpeggio (set on a held pad with the latched
     // arpeggio): { [key]: { play: [x, y], acc, limit, mode } }, see arpRule.
     arpRules: {},
@@ -81,7 +92,16 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
-  return withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr)))));
+  return withLfoPerControl(withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr))))));
+}
+
+// Web: one LFO per control (3 November). Older presets had one LFO for every
+// assignment: each control gets its wave, speed and amount, so they sound
+// the same (each control now runs its own copy, all in step on the clock).
+function withLfoPerControl(pr) {
+  if (Array.isArray(pr.lfoWaves) && pr.lfoWaves.length === 56) return pr;
+  return { ...pr, lfoWaves: new Array(56).fill(pr.lfoWave ?? 1), lfoSpeeds: new Array(56).fill(pr.lfoSpeed ?? 5),
+    lfoAmounts: new Array(56).fill(pr.lfoAmount ?? 0) };
 }
 
 // Web: the LFO no longer goes on the octave (asked by the user); presets
@@ -148,6 +168,11 @@ export class Controller {
     this.frame = new Uint8Array(FRAME);
     this.analyserRequested = false;
     this.lfoOutput = 0;
+    // Wave of every control's LFO, 0..255 (engine spectrum_lfo_waves), the
+    // control being edited (sent in every frame) and the turn of the others.
+    this.lfoWaves = new Uint8Array(56);
+    this.lfoFocus = -1;
+    this.lfoCursor = 0;
     this.midiChannel = 0; // 0 = omni
     this.midiCc = [0, 0, 0, 0];
 
@@ -833,15 +858,39 @@ export class Controller {
 
   // ---- Modulation sums -------------------------
 
-  // Web: the LFO is applied here for every destination, as for attack and
-  // release on the firmware: the Daisy runs it at full amount with no
-  // destinations (frame bytes 57 and 89-95) and reports the wave, 0..255
-  // (TX[34]); each assigned control moves from its value by its own signed
-  // depth, all scaled by the amount knob.
-  lfo(d) {
+  // Web: one LFO per control, run by the Daisy (lfo_bank.h of the engine) from the
+  // frame bytes 96-112. Each assigned control moves from its value by its
+  // own signed depth scaled by its own amount, times its own wave.
+  lfoDepthOf(d) {
     const pr = this.pr, mask = pr.lfoAssigned;
     if (!SUPPORTED.has(d) || !(mask[d >> 3] & (1 << (d & 7)))) return 0;
-    return (pr.lfoDepth?.[d] ?? 255) * (this.lfoOutput / 255) * (pr.lfoAmount / 255);
+    return Math.round((pr.lfoDepth?.[d] ?? 255) * (pr.lfoAmounts?.[d] ?? 255) / 255);
+  }
+
+  // Where the LFO moves a control now (control units), for the display.
+  lfoShown(d) { return this.lfoDepthOf(d) * this.lfoWaves[d] / 255; }
+
+  // What the controller applies itself: attack, release, transpose, tune
+  // and master; the Daisy applies the others.
+  lfo(d) { return LFO_HERE.has(d) ? this.lfoShown(d) : 0; }
+
+  // lfo_bank.h WriteEntry (engine): four controls a frame, the one being
+  // edited every time, the others in turn (20 controls: 7 frames, 35 ms).
+  writeLfoBank(f) {
+    const pr = this.pr, n = LFO_DESTINATIONS.length;
+    f[96] = 0xb8;
+    const entry = (slot, d) => {
+      const at = 97 + slot * 4, depth = this.lfoDepthOf(d) & 0xffff;
+      f[at] = d;
+      f[at + 1] = (clamp(pr.lfoWaves?.[d] ?? 1, 0, 5) & 7) | (lfoSpeedIndex(clamp(pr.lfoSpeeds?.[d] ?? 128, 0, 255)) << 3);
+      f[at + 2] = depth >> 8; f[at + 3] = depth & 255;
+    };
+    let slot = 0;
+    if (SUPPORTED.has(this.lfoFocus)) entry(slot++, this.lfoFocus);
+    for (let tries = 0; slot < 4 && tries < n; tries++) {
+      const d = LFO_DESTINATIONS[this.lfoCursor++ % n];
+      if (d !== this.lfoFocus) entry(slot++, d);
+    }
   }
 
   cc(d) {
@@ -914,12 +963,15 @@ export class Controller {
     f[80] = clamp(Math.round(pr.driveAmount + assign(DEST.Drive)), 0, 255);
     f[81] = this.analyserRequested ? 0xa6 : 0;
     f[83] = clamp(pr.spectralMode + Math.round(assign(DEST.FilterMode) / 255), 0, 3);
-    f[87] = 0xb7; f[88] = 7; // bytes 89-95: no Daisy destinations, see lfo()
+    f[87] = 0xb7; f[88] = 7; // bytes 89-95: the single LFO has no destinations
+    this.writeLfoBank(f);
     return f;
   }
 
-  // Daisy reply (FillNormalSpiTxFrame): envelopes and LFO output.
-  reply(tx) {
+  // Daisy reply (FillNormalSpiTxFrame): envelopes and LFO output; web: the
+  // wave of every control's LFO (spectrum_lfo_waves).
+  reply(tx, waves) {
+    if (waves) this.lfoWaves.set(waves);
     if (tx[17] !== 54) return;
     for (let i = 0; i < VOICES; i++) this.adsr[i] = tx[ENVELOPE[i]];
     this.lfoOutput = tx[34];
@@ -970,6 +1022,7 @@ export class Controller {
       bpm: this.bpm,
       clockPhase: this.clockPhase(),
       lfoOutput: this.lfoOutput,
+      lfoWaves: Array.from(this.lfoWaves),
     };
   }
 }

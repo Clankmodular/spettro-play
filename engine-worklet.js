@@ -110,16 +110,16 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     new Uint8Array(this.mem.buffer, this.rxPtr, FRAME).set(c.buildFrame());
     if (!this.e.spectrum_frame()) return;
     this.reply.set(new Uint8Array(this.mem.buffer, this.e.spectrum_reply(), FRAME));
-    c.reply(this.reply);
+    c.reply(this.reply, new Uint8Array(this.mem.buffer, this.e.spectrum_lfo_waves(), 56));
   }
 
   // Filter lobes for the analyser, with the controls modulated as on the ESP.
   geometry() {
     const c = this.controller, pr = c.pr;
-    const mod = (base, d) => Math.min(255, Math.max(0, base + c.lfo(d) + c.cc(d))) / 255;
+    const mod = (base, d) => Math.min(255, Math.max(0, base + c.lfoShown(d) + c.cc(d))) / 255;
     // Bands bipolar: the count is the lower half; above the middle the
     // lowest bands fade out as in the engine (LowCutGains), so their lobes go.
-    const byte = Math.min(255, Math.max(0, Math.round(pr.spectralBands + c.lfo(37) + c.cc(37))));
+    const byte = Math.min(255, Math.max(0, Math.round(pr.spectralBands + c.lfoShown(37) + c.cc(37))));
     const lowCut = byte > 128 ? (byte - 128) / 127 * 7 : 0;
     const ptr = this.e.spectrum_geometry(Math.min(1, byte / 128), mod(pr.spectralSpread, 39),
       mod(pr.spectralWidth, 40), pr.spectralRotate / 65535, IMAGE / 65535, pr.spectralMode,
