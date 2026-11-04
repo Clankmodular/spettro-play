@@ -5,7 +5,7 @@
 // The web version has no encoder: editable cards carry < > arrows and every
 // page returns its mouse regions ({x, y, w, h, step, click, select}).
 
-import { COLOR, drawText, textWidth } from './display.js?v=664d8b57f8';
+import { COLOR, drawText, textWidth } from './display.js?v=5988906657';
 
 const ARROW_W = 22;
 
@@ -179,10 +179,10 @@ export const ARP_PARAMS = ['tempo', 'pattern', 'gate', 'steps', 'hits', 'human']
 // ph: play position in steps (null when stopped), age: ms since the playing hit fired (-1: none),
 // stepMs }. act: { select(i), step(i, n, fine) }.
 export function drawArpPage(ctx, m, act) {
-  // Radius 77 (68 until 4 November: the pattern name grew to size 3, the user
-  // found size 2 too small): hits stay clear of converge, the widest name,
-  // and of the corner boxes.
-  const cx = 120, cy = 118, R = 77, r = m.rhythm, n = m.steps;
+  // Radius 74 (68 until 4 November: the pattern name grew to size 3, the user
+  // found size 2 too small; then 77, and 74 when the corners moved 5 px in):
+  // hits stay clear of converge, the widest name, and of the corner boxes.
+  const cx = 120, cy = 118, R = 74, r = m.rhythm, n = m.steps;
   const focus = ARP_PARAMS[m.focus];
   const tint = (id, color) => (focus === id ? COLOR.highlight : color);
   const back = (id) => (focus === id ? (m.editing ? COLOR.cardEdit : COLOR.cardFocus) : null);
@@ -231,24 +231,26 @@ export function drawArpPage(ctx, m, act) {
     if (on && m.age < 160) ring(ctx, x, y, size + 6 + 2 * Math.round(m.age / 32), 2, m.age < 80 ? COLOR.normal : COLOR.secondary);
   });
   const regions = [];
-  // Tempo and pattern on the ring's centre (y 90-143; a column chart of the
+  // Tempo and pattern on the ring's centre (y 87-138; a column chart of the
   // pattern's next notes under them went on 4 November, the user did not
-  // read it). Boxes 4 px wider than the text: converge's still clears the hits.
+  // read it). Boxes 2 px wider than the text: converge's still clears the hits.
   const centre = (i, y, size, color, h) => {
     const id = ARP_PARAMS[i], text = m.values[i], w = textWidth(text, size), b = back(id);
-    if (b) fill(ctx, cx - w / 2 - 4, y - 5, w + 8, size * 5 + 10, b);
+    if (b) fill(ctx, cx - w / 2 - 2, y - 5, w + 4, size * 5 + 10, b);
     drawText(ctx, text, cx, y, size, focus === id ? (m.editing ? COLOR.highlight : COLOR.normal) : color, 'center');
     if (focus === id) fill(ctx, cx - w / 2, y + size * 5 + 3, w, 2, COLOR.highlight);
     regions.push({ x: 64, y: y - 8, w: 112, h, select: () => act.select(i), click: () => act.select(i), step: (s, fine) => act.step(i, s, fine) });
   };
-  centre(0, 90, 5, COLOR.normal, 34);
-  centre(1, 126, 3, COLOR.secondary, 34);
-  // Corners: boxes 6 px from every edge, text 12 px from the sides; gate and
-  // human with a meter under the value.
+  centre(0, 87, 5, COLOR.normal, 34);
+  centre(1, 123, 3, COLOR.secondary, 34);
+  // Corners: text 17 px from the sides and 16 from top and bottom (12 and 11
+  // until 4 November, the user wanted 5 px more), boxes 3 px around it; gate
+  // and human with a meter under the value, which shows the percentage
+  // (the % sign went: 100% did not clear the hits).
   const corner = (i, x, y, align, meter) => {
     const id = ARP_PARAMS[i], v = m.values[i], b = back(id);
-    const w = Math.max(textWidth(id, 2), textWidth(v, 3), meter !== undefined ? 44 : 0) + 12;
-    const bx = align === 'right' ? x - w + 6 : x - 6, h = meter !== undefined ? 44 : 40;
+    const w = Math.max(textWidth(id, 2), textWidth(v, 3), meter !== undefined ? 44 : 0) + 6;
+    const bx = align === 'right' ? x - w + 3 : x - 3, h = meter !== undefined ? 44 : 40;
     if (b) fill(ctx, bx, y - 5, w, h, b);
     drawText(ctx, id, x, y, 2, focus === id ? COLOR.highlight : COLOR.secondary, align);
     drawText(ctx, v, x, y + 16, 3, focus === id && m.editing ? COLOR.highlight : COLOR.normal, align);
@@ -262,10 +264,10 @@ export function drawArpPage(ctx, m, act) {
   };
   // Value 16 px under its label (12 until 4 November: the user wanted them
   // further apart).
-  corner(3, 12, 11, 'left');
-  corner(4, 228, 11, 'right');
-  corner(2, 12, 195, 'left', m.gate / 100);
-  corner(5, 228, 195, 'right', m.human / 100);
+  corner(3, 17, 16, 'left');
+  corner(4, 223, 16, 'right');
+  corner(2, 17, 189, 'left', m.gate / 100);
+  corner(5, 223, 189, 'right', m.human / 100);
   return regions;
 }
 

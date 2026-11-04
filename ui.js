@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=664d8b57f8';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=664d8b57f8';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=664d8b57f8';
-import * as P from './pages.js?v=664d8b57f8';
-import { MODES, BANKS } from './display.js?v=664d8b57f8';
-import { Presets, SLOTS } from './presets.js?v=664d8b57f8';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=5988906657';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=5988906657';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=5988906657';
+import * as P from './pages.js?v=5988906657';
+import { MODES, BANKS } from './display.js?v=5988906657';
+import { Presets, SLOTS } from './presets.js?v=5988906657';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -1550,8 +1550,8 @@ export class Ui {
       age = (ph - cur - rhythm[cur].delay) * a.period;
     }
     return P.drawArpPage(ctx, {
-      values: [DIVISIONS[divisionIndex(pr.trilloSpeed)], PATTERNS[pr.trilloPattern], `${pr.trilloHoldPercent}%`,
-        `${steps}`, `${hits}`, `${human}%`],
+      values: [DIVISIONS[divisionIndex(pr.trilloSpeed)], PATTERNS[pr.trilloPattern], `${pr.trilloHoldPercent}`,
+        `${steps}`, `${hits}`, `${human}`],
       gate: pr.trilloHoldPercent, human, steps, focus: menu.row, editing: false, on: pr.trilloOn,
       rhythm, ph, age, stepMs,
     }, { select: (i) => { menu.row = i; }, step: (i, n, fine) => this.edit('arp', i, n, fine) });

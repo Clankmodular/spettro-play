@@ -5,9 +5,9 @@
 // exact windows of the panel (panel-lights.js): knob rings and fader bars
 // show the current value, LEDs light inside their printed outline.
 
-import * as L from './panel-layout.js?v=664d8b57f8';
-import { LIGHTS } from './panel-lights.js?v=664d8b57f8';
-import { VIEW, toPage } from './display.js?v=664d8b57f8';
+import * as L from './panel-layout.js?v=5988906657';
+import { LIGHTS } from './panel-lights.js?v=5988906657';
+import { VIEW, toPage } from './display.js?v=5988906657';
 
 const NS = 'http://www.w3.org/2000/svg';
 const el = (name, attrs = {}, parent) => {
@@ -43,7 +43,7 @@ export class Panel {
     this.svg = el('svg', { viewBox: `${x} ${y} ${width} ${height}`, class: 'panel' }, container);
     this.defs = el('defs', {}, this.svg);
     this.gradients(this.defs);
-    el('image', { href: 'panel.svg?v=664d8b57f8', x: 0, y: 0, width: L.VIEWBOX.width, height: L.VIEWBOX.height }, this.svg);
+    el('image', { href: 'panel.svg?v=5988906657', x: 0, y: 0, width: L.VIEWBOX.width, height: L.VIEWBOX.height }, this.svg);
 
     this.ledLayer = el('g', { class: 'leds' }, this.svg);
     this.windows();
