@@ -12,7 +12,10 @@
 <body>
   <div class="stage">
     <header class="bar">
-      <div class="brand" role="img" aria-label="Clank Spettro"></div>
+      <div class="brand-row">
+        <div class="brand" role="img" aria-label="Clank Spettro"></div>
+        <span class="version" title="Versione della pagina: cambia a ogni pubblicazione">v 68 · 4/11</span>
+      </div>
       <div class="tools">
         <button id="guide-open" type="button" aria-haspopup="dialog" title="How to play Spettro">guide</button>
         <button id="keyboard-mode" type="button" aria-pressed="false" title="Tastiera del PC come pad (tasto ` per attivare)">keyboard mode</button>
@@ -82,7 +85,7 @@
             delay and reverb, so their echoes and tails build on the repeats, while whatever else you play sounds over it. The fader has 12 steps from the bottom (one violet LED each): the plain drone,
             then 1/2, 1/4., 1/4, 1/8., 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/64 of the beat; the screen shows the step.
             Letting go of ❄ stops it and gives the fader back to transpose; the step is kept, so the next drone stutters again at once.</li>
-          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page (tempo division, pattern, gate length, groove). The grooves shape time and pressure, and pressure opens the bands: <b>straight</b> (as played), <b>swing</b>, <b>ghost</b> (beats full, the rest barely touched), <b>swell</b>, <b>fade</b> and <b>breath</b> (the pressure rises, falls, or both over the bar), <b>euclid</b> (7 accents spread over 16), <b>poly 3</b> (an accent every 3 steps), <b>rush</b> (notes closing up like a bouncing ball), <b>drift</b> (loose, the same on every bar).
+          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page (tempo division, pattern, gate length, rhythm). <b>steps</b> and <b>hits</b> make a Euclidean rhythm: the hits spread as evenly as they go over the steps (3 of 8 is the tresillo, hits = steps plays every step); on a rest the pattern waits, so its notes keep their order. <b>human</b> (humanize) moves pressure and time: the pressure drops at random (and opens the bands less), the odd steps come a little late (microswing) and every step drifts a touch.
             The pads of the arpeggio's notes glow dim <span class="sw c"></span> turquoise, the one playing yellow.
             With the arpeggio latched by Hold, hold one of its pads: that note's page. <b>play</b> — on which cycles it sounds
             (1:1 every pass of the pattern, 1:2 the first of every two, 2:2 the second…); <b>acc</b> — scale degrees it moves
@@ -180,7 +183,10 @@
             Double tap ‹ clears every cycle. Loops are saved with presets, up to 24.</li>
           <li>Notes you play while ‹ is recording, with their bends, slides and octave changes, make a cycle of their own, from the first note
             (or the first octave change) to the closing tap, played back as if you played them (Hold and the arpeggio work on them).
-            A new take with notes replaces it. If you changed octave in the take, every round starts from the octave it started in.</li>
+            Each note keeps the octave and transpose it was played with: changing octave while you record moves the notes, not the
+            panel, and changing them afterwards does not move the cycle.
+            A new take over it overdubs: the new notes join the cycle and play from the next round, nothing is erased
+            (double tap ‹, or the cycle's pad on the loop page, to delete it).</li>
           <li>Octave changes alone, with no notes in the take, make an octave cycle: it changes octave under whatever you play.
             A new octave take replaces it (and takes the octave changes out of the note cycle); changing octave by hand removes it.</li>
           <li>Hold ‹ for half a second: the loop page. Every light goes dark but ‹ (blinking blue) and one blue pad per

@@ -84,10 +84,13 @@ export function drawLoopPage(ctx, m, act) {
   ctx.fillStyle = COLOR.highlight;
   // Notes: a bar per note, one row of 4 px per pad (pad 1 at the top).
   if (m.lane.notes) {
-    const open = new Map();
+    const open = new Map(), seen = new Set();
     const bar = (key, from, to) => ctx.fillRect(px(from), Y + 6 + key * 4 + 1, Math.max(2, px(to) - px(from)), 3);
     for (const [at, key, p, target] of pts) {
       if (p === -1 || p === -3) continue; // a bend (the note stays on its row) or an octave change
+      // A release with no note before it: an overdubbed note across the top.
+      if (p === 0 && !open.has(key) && !seen.has(key)) bar(key, 0, at);
+      seen.add(key);
       if (open.has(key)) { bar(key, open.get(key), at); open.delete(key); }
       if (p > 0) open.set(key, at);
       else if (p === -2) open.set(target, at); // a slide: on the next pad's row

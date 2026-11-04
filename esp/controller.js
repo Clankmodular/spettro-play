@@ -6,7 +6,7 @@
 // frame is written as in updateBuffer() (esp32/src/spectrum.cpp).
 
 import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js';
-import { Sequence, stepsPerBeat, groovePressure, grooveDelay, PLAYED_PRESSURE } from './trillo.js';
+import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, MAX_ARP_STEPS } from './trillo.js';
 
 export const FRAME = 128;
 const VOICES = 5;
@@ -80,7 +80,9 @@ export function defaultPreset() {
     arpRules: {},
     ccAssignDest: [DEST.None, DEST.None, DEST.None, DEST.None], ccAssignAmount: [0, 0, 0, 0],
     trilloOn: false, bandAttackShape: 0, bandReleaseShape: 0, bandSustainMask: 0xff,
-    trilloSpeed: 128, trilloHoldPercent: 50, trilloGroove: 0, trilloPattern: 0,
+    trilloSpeed: 128, trilloHoldPercent: 50, trilloPattern: 0,
+    // Web: the arpeggio's Euclidean rhythm and humanize (see trillo.js).
+    trilloSteps: 8, trilloHits: 8, trilloHumanize: 0,
     latchedNote: false, articulationDegreeTranspose: 0, presetBpm: 120, oscBank: 0,
   };
 }
@@ -91,7 +93,7 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
-  return withLfoPerControl(withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr))))));
+  return withArpRhythm(withLfoPerControl(withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr)))))));
 }
 
 // Web: one LFO per control (3 November). Older presets had one LFO for every
@@ -192,12 +194,15 @@ export class Controller {
     this.keyDown = new Uint8Array(KEYS);
     this.keyStack = [];
     this.keyboardFreq = new Float32Array(KEYS);
+    // Web: octave and transpose fader of the keys last played by the note
+    // cycle, { octave, degree } (see refreshVoices); a key played live loses it.
+    this.keyPin = new Map();
     this.updateKeyboard();
 
     // Voices, as the polyV* arrays of the firmware.
     this.v = Array.from({ length: VOICES }, () => ({
       key: 255, note: 60, cents: 50, aft: 0, gate: false, trig: false, owner: OWNER_KEYBOARD,
-      transpose: 0, degree: 0, octave: 3, holdKey: 255, midiNote: -1, midiChannel: -1, looped: false,
+      transpose: 0, degree: 0, octave: 3, holdKey: 255, midiNote: -1, midiChannel: -1, looped: false, pin: null,
       bendTo: 255, bendPos: 0,
     }));
     this.gen = new Uint8Array(VOICES);
@@ -247,8 +252,8 @@ export class Controller {
     return clamp(this.pr.octaveIndex, 0, 6);
   }
 
-  currentDegreeTranspose() {
-    return clamp(this.pr.articulationDegreeTranspose + Math.round(this.lfo(DEST.Transpose) * 24 / 255), -12, 12);
+  currentDegreeTranspose(fader = this.pr.articulationDegreeTranspose) {
+    return clamp(fader + Math.round(this.lfo(DEST.Transpose) * 24 / 255), -12, 12);
   }
 
   baseFrequency(key, degree) {
@@ -281,12 +286,14 @@ export class Controller {
   }
 
   // Live voices follow octave, transpose and root; momentary captures freeze.
+  // Notes of the looper's note cycle keep the octave and transpose fader of
+  // their take (v.pin), and follow only the LFO on transpose and the root.
   refreshVoices() {
     for (let i = 0; i < VOICES; i++) {
       const v = this.v[i];
       if (!v.gate || v.owner !== OWNER_KEYBOARD || v.key >= KEYS || v.holdKey < KEYS) continue;
-      v.degree = this.currentDegreeTranspose();
-      v.octave = this.currentOctaveIndex();
+      v.degree = this.currentDegreeTranspose(v.pin?.degree);
+      v.octave = v.pin ? v.pin.octave : this.currentOctaveIndex();
       v.transpose = this.pr.scaleRoot;
       this.renderVoice(i);
     }
@@ -368,6 +375,7 @@ export class Controller {
   keyOn(key, pressure) {
     if (key < 0 || key >= KEYS) return;
     pressure = clamp(Math.round(pressure), 1, 255);
+    if (!this.noteLooping) this.keyPin.delete(key);
     if (this.pr.latchedNote && this.keyStack.includes(key) && !this.keyDown[key]) {
       // Latched retouch: a short tap removes the key on release.
       this.keyDown[key] = 1;
@@ -475,6 +483,11 @@ export class Controller {
     for (const k of this.keyStack) this.noteOnKey(k, true);
   }
 
+  arpRhythm() {
+    const pr = this.pr, steps = clamp(pr.trilloSteps ?? 8, 1, MAX_ARP_STEPS);
+    return { steps, hits: clamp(pr.trilloHits ?? steps, 1, steps), human: clamp(pr.trilloHumanize ?? 0, 0, 100) };
+  }
+
   stopArpNote() {
     if (this.arpKey >= KEYS) return;
     for (const v of this.v) if (v.owner === OWNER_KEYBOARD && v.key === this.arpKey) v.gate = false;
@@ -490,20 +503,23 @@ export class Controller {
     const period = this.clockTimeMs / stepsPerBeat(speed);
     if (this.arpNext === null) this.arpNext = this.timeMs;
     if (this.timeMs - this.arpNext > 2 * period) this.arpNext = this.timeMs;
-    const delay = grooveDelay(pr.trilloGroove, this.arpStep, period);
+    const { steps, hits, human } = this.arpRhythm();
+    const delay = humanDelay(human, this.arpStep, period);
     if (this.timeMs < this.arpNext + delay) return;
     this.stopArpNote();
+    // A rest of the Euclidean rhythm: the pattern stays where it is.
+    if (!euclidHit(steps, hits, this.arpStep)) { this.arpStep++; this.arpNext += period; return; }
     const index = this.sequence.next(pr.trilloPattern, this.keyStack, (k) => this.keyboardFreq[k]);
     const key = index < this.keyStack.length ? this.keyStack[index] : 255;
     const rule = key < KEYS ? pr.arpRules?.[key] : null;
     // A pad with a rule plays only on its cycles (x of every y) and moves by
     // its accumulator each time it plays.
     if (key < KEYS && (!rule || this.arpRulePlays(rule))) {
-      const pressure = groovePressure(pr.trilloGroove, this.arpStep);
-      this.noteOnKey(key, true, pressure === PLAYED_PRESSURE ? undefined : pressure, rule ? this.arpAccumulate(key, rule) : 0);
+      const pressure = human ? humanPressure(human, this.arpStep, this.keyAftertouch[key]) : undefined;
+      this.noteOnKey(key, true, pressure, rule ? this.arpAccumulate(key, rule) : 0);
       this.arpKey = key;
-      // Gate length uses the interval to the next (groove-delayed) onset.
-      const nextDelay = grooveDelay(pr.trilloGroove, this.arpStep + 1, period);
+      // Gate length uses the interval to the next (humanized) onset.
+      const nextDelay = humanDelay(human, this.arpStep + 1, period);
       this.arpGateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
     }
     // A cycle: the pattern back at its first step (every step for one key).
@@ -559,9 +575,10 @@ export class Controller {
     const v = this.v[i];
     const fresh = !v.gate || v.key !== key;
     if (fresh || this.pr.trilloOn || this.pr.latchedNote) {
+      v.pin = this.keyPin.get(key) || null;
       v.transpose = this.pr.scaleRoot;
-      v.degree = this.currentDegreeTranspose();
-      v.octave = this.currentOctaveIndex();
+      v.degree = this.currentDegreeTranspose(v.pin?.degree);
+      v.octave = v.pin ? v.pin.octave : this.currentOctaveIndex();
     }
     v.key = key;
     v.bendTo = 255; v.bendPos = 0;
@@ -757,17 +774,22 @@ export class Controller {
     const speed = clamp(pr.trilloSpeed + this.cc(DEST.Trillo), 0, 255);
     const period = this.clockTimeMs / stepsPerBeat(speed);
     if (this.timeMs - a.next > 2 * period) a.next = this.timeMs;
-    const delay = grooveDelay(pr.trilloGroove, a.step, period);
+    const { steps, hits, human } = this.arpRhythm();
+    const delay = humanDelay(human, a.step, period);
     if (this.timeMs < a.next + delay) return;
+    if (!euclidHit(steps, hits, a.step)) {
+      if (a.playing) { this.midiSilence(); a.playing = false; }
+      a.step++; a.next += period;
+      return;
+    }
     const used = held.slice(-12);
     const index = a.sequence.next(pr.trilloPattern, used.map(([note]) => note), (note) => 440 * Math.pow(2, (note - 69) / 12));
     if (index < used.length) {
       const [note, h] = used[index];
-      const pressure = groovePressure(pr.trilloGroove, a.step);
       this.midiSilence();
-      this.midiVoiceOn(note, h.channel, pressure === PLAYED_PRESSURE ? h.pressure : pressure);
+      this.midiVoiceOn(note, h.channel, human ? humanPressure(human, a.step, h.pressure) : h.pressure);
       a.playing = true;
-      const nextDelay = grooveDelay(pr.trilloGroove, a.step + 1, period);
+      const nextDelay = humanDelay(human, a.step + 1, period);
       a.gateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
     }
     a.step++;
@@ -794,18 +816,30 @@ export class Controller {
   alignBeat() { this.clockStart = this.timeMs; }
 
   // ---- Web: the note cycle of the motion loop ------------------------------
-  // Recorded on the panel while rec is armed (points [ms, key, pressure],
-  // pressure 0 = off; [ms, key, -1, target, pos] a bend, [ms, key, -2,
+  // Recorded on the panel while rec is armed (points [ms, key, pressure,
+  // octave, fader], pressure 0 = off; [ms, key, -1, target, pos] a bend, [ms, key, -2,
   // target] a slide to the next pad, [ms, 0, -3, octave] an octave change), played here on the 5 ms tick through the keyboard
-  // path, so Hold and the arpeggio work on it. phase: where it is now, in
+  // path, so Hold and the arpeggio work on it. A note keeps the octave and
+  // transpose fader of its take (keyPin; older cycles without them follow
+  // the panel). phase: where it is now, in
   // recorded time; align: start from the top on the next beat (quantize).
   // The octave cycle (octave changes recorded without notes) is played the
   // same way, before the notes on each tick.
 
   setNoteLoop(loop, align = false) {
     this.noteLoopRelease();
+    this.keyPin.clear();
     this.noteLoop = this.eventLoop(loop, align);
     this.noteLoopPlaying = !!this.noteLoop;
+    // Notes with their own octave: the cycle's octave changes (older cycles)
+    // do not move the panel.
+    if (this.noteLoop) this.noteLoop.pinned = this.noteLoop.points.some(([, , p, o]) => p > 0 && o !== undefined);
+  }
+
+  // Overdub: points played over the running cycle join it at the next round
+  // (the top), so a note just played live is not played again at once.
+  addNoteLoopPoints(points) {
+    if (this.noteLoop) this.noteLoop.pending.push(...points);
   }
 
   setOctaveLoop(loop, align = false) { this.octaveLoop = this.eventLoop(loop, align); }
@@ -818,7 +852,7 @@ export class Controller {
     // last: the position already played; events after it and up to the
     // position of each tick fire (from the top: the one at 0 too).
     const last = align ? -1 : (((loop.phase || 0) - 1e-6) % len + len) % len;
-    return { points: loop.points, length: len, rate, origin, last, on: new Set() };
+    return { points: loop.points, length: len, rate, origin, last, on: new Set(), pending: [] };
   }
 
   noteLoopRelease() {
@@ -846,11 +880,17 @@ export class Controller {
       for (const [at, key, p, target, bend] of n.points) {
         if (at <= from || at > to) continue;
         this.noteLooping = true;
-        if (p > 0) { if (n.on.has(key)) this.keyOff(key); this.keyOn(key, p); n.on.add(key); }
+        if (p > 0) {
+          if (n.on.has(key)) this.keyOff(key);
+          if (target !== undefined) this.keyPin.set(key, { octave: target, degree: bend });
+          this.keyOn(key, p); n.on.add(key);
+        }
         else if (p === 0) { if (n.on.delete(key)) this.keyOff(key); }
-        else if (p === -3) this.loopOctave(target);
+        else if (p === -3) { if (!n.pinned) this.loopOctave(target); }
         else if (n.on.has(key) && p === -1) this.keyBend(key, target, bend);
         else if (n.on.has(key) && p === -2 && !n.on.has(target)) {
+          const pin = this.keyPin.get(key);
+          if (pin) this.keyPin.set(target, pin);
           this.keySlide(key, target);
           n.on.delete(key); n.on.add(target);
         }
@@ -858,7 +898,11 @@ export class Controller {
       }
     };
     if (pos >= n.last) fire(n.last, pos);
-    else { fire(n.last, n.length); fire(-1, pos); }
+    else {
+      fire(n.last, n.length);
+      if (n.pending.length) { n.points = [...n.points, ...n.pending]; n.pending = []; }
+      fire(-1, pos);
+    }
     n.last = pos;
   }
 
