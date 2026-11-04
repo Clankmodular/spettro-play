@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=6f78effb89';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=6f78effb89';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure, Sequence } from './esp/trillo.js?v=6f78effb89';
-import * as P from './pages.js?v=6f78effb89';
-import { MODES, BANKS } from './display.js?v=6f78effb89';
-import { Presets, SLOTS } from './presets.js?v=6f78effb89';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=664d8b57f8';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=664d8b57f8';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=664d8b57f8';
+import * as P from './pages.js?v=664d8b57f8';
+import { MODES, BANKS } from './display.js?v=664d8b57f8';
+import { Presets, SLOTS } from './presets.js?v=664d8b57f8';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -1541,24 +1541,19 @@ export class Ui {
     }));
     const a = st?.arp, stack = st?.stack || [];
     const stepMs = a?.period || 60000 / (this.bpm || 120) / stepsPerBeat(pr.trilloSpeed);
-    let ph = null, age = -1, playedHits = 0;
+    let ph = null, age = -1;
     if (pr.trilloOn && a && a.next !== null && a.step > 0 && stack.length && a.period) {
       const t = a.time + (now() - (this.statusAt || now()));
       const since = Math.max(0, t - (a.next - a.period)) / a.period;
       ph = ((a.step - 1) % steps + Math.min(since, 1.99)) % steps;
       const cur = Math.floor(ph);
       age = (ph - cur - rhythm[cur].delay) * a.period;
-      playedHits = rhythm.slice(0, cur + 1).filter((s) => s.hit).length - 1;
     }
-    // The pattern's shape: the next 8 notes of the held ones, as ranks.
-    const f = this.keyFrequencies(), sorted = [...stack].sort((x, y) => f[x] - f[y]), seq = new Sequence(0x5bd1e995);
-    const order = [];
-    for (let i = 0; i < 8 && stack.length; i++) order.push(sorted.indexOf(stack[seq.next(pr.trilloPattern, stack, (k) => f[k])]));
     return P.drawArpPage(ctx, {
       values: [DIVISIONS[divisionIndex(pr.trilloSpeed)], PATTERNS[pr.trilloPattern], `${pr.trilloHoldPercent}%`,
         `${steps}`, `${hits}`, `${human}%`],
       gate: pr.trilloHoldPercent, human, steps, focus: menu.row, editing: false, on: pr.trilloOn,
-      rhythm, order, levels: stack.length, ph, age, stepMs, playedHits,
+      rhythm, ph, age, stepMs,
     }, { select: (i) => { menu.row = i; }, step: (i, n, fine) => this.edit('arp', i, n, fine) });
   }
 

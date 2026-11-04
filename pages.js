@@ -5,7 +5,7 @@
 // The web version has no encoder: editable cards carry < > arrows and every
 // page returns its mouse regions ({x, y, w, h, step, click, select}).
 
-import { COLOR, drawText, textWidth } from './display.js?v=6f78effb89';
+import { COLOR, drawText, textWidth } from './display.js?v=664d8b57f8';
 
 const ARROW_W = 22;
 
@@ -138,9 +138,8 @@ export function drawListPage(ctx, title, menu, items, right, back) {
 // are discs sized by their humanized pressure and moved by the swing (a
 // ghost ring where they would sit straight), each with a gate trail that
 // fills while its note sounds; a comet on the rim follows the arpeggio and
-// the firing hit pulses. In the middle tempo, pattern and the pattern's
-// shape (the next 8 notes, taller = higher); in the corners steps, hits,
-// gate and human. The focused value sits on a cardFocus box with its label
+// the firing hit pulses. In the middle tempo and pattern; in the corners
+// steps, hits, gate and human. The focused value sits on a cardFocus box with its label
 // in highlight blue, and turns blue the part of the drawing it moves. On
 // the instrument the encoder turns through the six and a press takes one
 // (cardEdit, value blue), as m.editing; here a click picks, wheel or drag
@@ -177,11 +176,13 @@ export const ARP_PARAMS = ['tempo', 'pattern', 'gate', 'steps', 'hits', 'human']
 
 // m: { values: six strings in ARP_PARAMS order, gate, human (0-100), steps,
 // focus (index), editing, on, rhythm: [{ hit, delay (steps), p }],
-// order: ranks of the next 8 notes, levels: notes held, ph: play position in
-// steps (null when stopped), age: ms since the playing hit fired (-1: none),
+// ph: play position in steps (null when stopped), age: ms since the playing hit fired (-1: none),
 // stepMs }. act: { select(i), step(i, n, fine) }.
 export function drawArpPage(ctx, m, act) {
-  const cx = 120, cy = 124, R = 68, r = m.rhythm, n = m.steps;
+  // Radius 77 (68 until 4 November: the pattern name grew to size 3, the user
+  // found size 2 too small): hits stay clear of converge, the widest name,
+  // and of the corner boxes.
+  const cx = 120, cy = 118, R = 77, r = m.rhythm, n = m.steps;
   const focus = ARP_PARAMS[m.focus];
   const tint = (id, color) => (focus === id ? COLOR.highlight : color);
   const back = (id) => (focus === id ? (m.editing ? COLOR.cardEdit : COLOR.cardFocus) : null);
@@ -203,7 +204,7 @@ export function drawArpPage(ctx, m, act) {
   r.forEach((s, i) => {
     if (s.hit) return;
     const [x, y] = at(i, R);
-    disc(ctx, x, y, 5, i === cur ? COLOR.secondary : tint('steps', COLOR.track));
+    disc(ctx, x, y, 6, i === cur ? COLOR.secondary : tint('steps', COLOR.track));
   });
   // Gate trails: tenths of a step; the playing one fills as its note sounds.
   const trail = Math.max(1, Math.round(m.gate / 10));
@@ -219,7 +220,7 @@ export function drawArpPage(ctx, m, act) {
   r.forEach((s, i) => {
     if (!s.hit || s.delay < 0.04) return;
     const [x, y] = at(i, R);
-    ring(ctx, x, y, 8, 1, tint('human', COLOR.rail));
+    ring(ctx, x, y, 9, 1, tint('human', COLOR.rail));
   });
   // Hits, sized by their pressure; the one firing pulses for 160 ms.
   r.forEach((s, i) => {
@@ -230,42 +231,41 @@ export function drawArpPage(ctx, m, act) {
     if (on && m.age < 160) ring(ctx, x, y, size + 6 + 2 * Math.round(m.age / 32), 2, m.age < 80 ? COLOR.normal : COLOR.secondary);
   });
   const regions = [];
-  // Tempo, pattern and the pattern's shape, on the ring's centre (y 93-156).
+  // Tempo and pattern on the ring's centre (y 90-143; a column chart of the
+  // pattern's next notes under them went on 4 November, the user did not
+  // read it). Boxes 4 px wider than the text: converge's still clears the hits.
   const centre = (i, y, size, color, h) => {
     const id = ARP_PARAMS[i], text = m.values[i], w = textWidth(text, size), b = back(id);
-    if (b) fill(ctx, cx - w / 2 - 6, y - 5, w + 12, size * 5 + 10, b);
+    if (b) fill(ctx, cx - w / 2 - 4, y - 5, w + 8, size * 5 + 10, b);
     drawText(ctx, text, cx, y, size, focus === id ? (m.editing ? COLOR.highlight : COLOR.normal) : color, 'center');
     if (focus === id) fill(ctx, cx - w / 2, y + size * 5 + 3, w, 2, COLOR.highlight);
     regions.push({ x: 64, y: y - 8, w: 112, h, select: () => act.select(i), click: () => act.select(i), step: (s, fine) => act.step(i, s, fine) });
   };
-  centre(0, 93, 5, COLOR.normal, 34);
-  centre(1, 127, 2, COLOR.secondary, 38);
-  const played = m.order.length ? m.playedHits % 8 : -1;
-  m.order.forEach((k, j) => {
-    const h = Math.max(2, Math.round((k + 1) * 10 / Math.max(1, m.levels)));
-    fill(ctx, 97 + j * 6, 156 - h, 4, h, fired && j === played ? COLOR.normal : tint('pattern', COLOR.rail));
-  });
+  centre(0, 90, 5, COLOR.normal, 34);
+  centre(1, 126, 3, COLOR.secondary, 34);
   // Corners: boxes 6 px from every edge, text 12 px from the sides; gate and
   // human with a meter under the value.
   const corner = (i, x, y, align, meter) => {
     const id = ARP_PARAMS[i], v = m.values[i], b = back(id);
     const w = Math.max(textWidth(id, 2), textWidth(v, 3), meter !== undefined ? 44 : 0) + 12;
-    const bx = align === 'right' ? x - w + 6 : x - 6, h = meter !== undefined ? 41 : 36;
+    const bx = align === 'right' ? x - w + 6 : x - 6, h = meter !== undefined ? 44 : 40;
     if (b) fill(ctx, bx, y - 5, w, h, b);
     drawText(ctx, id, x, y, 2, focus === id ? COLOR.highlight : COLOR.secondary, align);
-    drawText(ctx, v, x, y + 12, 3, focus === id && m.editing ? COLOR.highlight : COLOR.normal, align);
+    drawText(ctx, v, x, y + 16, 3, focus === id && m.editing ? COLOR.highlight : COLOR.normal, align);
     if (meter !== undefined) {
       const mx = align === 'right' ? x - 44 : x;
-      fill(ctx, mx, y + 30, 44, 2, COLOR.track);
-      fill(ctx, mx, y + 30, Math.round(44 * meter), 2, focus === id ? COLOR.highlight : COLOR.meter);
+      fill(ctx, mx, y + 33, 44, 2, COLOR.track);
+      fill(ctx, mx, y + 33, Math.round(44 * meter), 2, focus === id ? COLOR.highlight : COLOR.meter);
     }
     const rx = align === 'right' ? 240 - 84 : 0, ry = y < 120 ? 0 : 240 - 50;
     regions.push({ x: rx, y: ry, w: 84, h: 50, select: () => act.select(i), click: () => act.select(i), step: (s, fine) => act.step(i, s, fine) });
   };
+  // Value 16 px under its label (12 until 4 November: the user wanted them
+  // further apart).
   corner(3, 12, 11, 'left');
   corner(4, 228, 11, 'right');
-  corner(2, 12, 198, 'left', m.gate / 100);
-  corner(5, 228, 198, 'right', m.human / 100);
+  corner(2, 12, 195, 'left', m.gate / 100);
+  corner(5, 228, 195, 'right', m.human / 100);
   return regions;
 }
 
