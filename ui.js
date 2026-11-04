@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=510a2a021f';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=510a2a021f';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision } from './esp/trillo.js?v=510a2a021f';
-import * as P from './pages.js?v=510a2a021f';
-import { MODES, BANKS } from './display.js?v=510a2a021f';
-import { Presets, SLOTS } from './presets.js?v=510a2a021f';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=00a0382bc5';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=00a0382bc5';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision } from './esp/trillo.js?v=00a0382bc5';
+import * as P from './pages.js?v=00a0382bc5';
+import { MODES, BANKS } from './display.js?v=00a0382bc5';
+import { Presets, SLOTS } from './presets.js?v=00a0382bc5';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -715,7 +715,7 @@ export class Ui {
       return;
     }
     if (page === 'arp') {
-      if (row === 0) this.set({ trilloSpeed: speedForDivision(clamp(divisionIndex(pr.trilloSpeed) + step, 0, 6)) });
+      if (row === 0) this.set({ trilloSpeed: speedForDivision(clamp(divisionIndex(pr.trilloSpeed) + step, 0, DIVISIONS.length - 1)) });
       if (row === 1) this.set({ trilloPattern: (pr.trilloPattern + step + PATTERNS.length) % PATTERNS.length });
       if (row === 2) this.set({ trilloHoldPercent: clamp(pr.trilloHoldPercent + step, 1, 100) });
       // Euclidean rhythm: hits stay within the steps.

@@ -6,7 +6,7 @@
 // 96-frame block and its reply frame goes back to the controller and, about
 // 30 times per second, to the panel for LEDs and display.
 
-import { Controller, FRAME, IMAGE, STUTTER } from './esp/controller.js?v=510a2a021f';
+import { Controller, FRAME, IMAGE, STUTTER } from './esp/controller.js?v=00a0382bc5';
 
 // The engine runs at engineRate (48 kHz); sampleRate, the device's rate,
 // may differ (44.1 kHz interfaces): then process() resamples. Frame and status timing count engine samples.

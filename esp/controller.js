@@ -5,8 +5,8 @@
 // panel state lives in `pr` with the firmware field names and scales; every
 // frame is written as in updateBuffer() (esp32/src/spectrum.cpp).
 
-import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=510a2a021f';
-import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=510a2a021f';
+import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=00a0382bc5';
+import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=00a0382bc5';
 
 export const FRAME = 128;
 const VOICES = 5;
@@ -346,14 +346,17 @@ export class Controller {
   // Web: with a note cycle of the looper playing, its notes come first. A
   // played note takes a free voice, then one releasing, then one of its own
   // played notes, never a sounding note of the cycle (it stays silent when
-  // they hold every voice); the cycle takes its own oldest first, then the
-  // played notes. Round robin within each step, as claimVoice.
-  claimLoopAwareVoice(looped) {
+  // they hold every voice); MIDI notes the same. The cycle takes a played
+  // or MIDI note before one of its own (4 November: it took its own first,
+  // so with four pads held a chord of the cycle came out as one note).
+  // Round robin within each step, as claimVoice.
+  claimLoopAwareVoice(looped, owner = OWNER_KEYBOARD) {
     const free = (i) => this.v[i].holdKey >= KEYS;
+    const ofCycle = (i) => this.v[i].owner === OWNER_KEYBOARD && this.v[i].looped;
     const steps = [
       (i) => this.silent(i),
       (i) => !this.v[i].gate && free(i),
-      (i) => this.v[i].gate && free(i) && this.v[i].looped === looped,
+      (i) => this.v[i].gate && free(i) && !ofCycle(i),
       ...(looped ? [(i) => this.v[i].gate && free(i)] : []),
     ];
     let chosen = -1;
@@ -367,8 +370,8 @@ export class Controller {
     if (chosen < 0) return -1;
     this.stealIdx = (chosen + 1) % VOICES;
     const v = this.v[chosen];
-    if (v.owner !== OWNER_KEYBOARD) { v.midiNote = -1; v.key = 255; }
-    v.owner = OWNER_KEYBOARD;
+    if (v.owner !== owner) { v.midiNote = -1; v.key = 255; }
+    v.owner = owner;
     v.holdKey = 255;
     return chosen;
   }
@@ -610,7 +613,9 @@ export class Controller {
     if (trigger) v.trig = true;
     this.lastVoice = i;
     this.renderVoice(i);
-    if (trigger && this.recording()) this.recNoteOn(i);
+    // Web (the user's request, 4 November): with the arpeggio latched by Hold
+    // rec takes no notes (the arpeggio goes on under the recorded movements).
+    if (trigger && this.recording() && !(this.pr.trilloOn && this.pr.latchedNote)) this.recNoteOn(i);
   }
 
   // ---- Hold (❄): tap latches, hold >= 300 ms captures momentarily -------
@@ -756,10 +761,10 @@ export class Controller {
 
   midiVoiceOn(note, channel, pressure) {
     let i = this.v.findIndex((v) => v.owner === OWNER_MIDI && v.gate && v.midiNote === note && v.midiChannel === channel);
-    if (i < 0) i = this.claimVoice(OWNER_MIDI);
+    if (i < 0) i = this.noteLoopPlaying ? this.claimLoopAwareVoice(false, OWNER_MIDI) : this.claimVoice(OWNER_MIDI);
     if (i < 0) return;
     const v = this.v[i];
-    Object.assign(v, { midiNote: note, midiChannel: channel, aft: pressure, gate: true, trig: true });
+    Object.assign(v, { midiNote: note, midiChannel: channel, aft: pressure, gate: true, trig: true, looped: false, pin: null });
     this.lastVoice = i;
     this.renderMidiVoice(v);
   }

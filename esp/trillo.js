@@ -54,12 +54,18 @@ export function withArpVelocity(pr) {
   return { ...pr, arpRules };
 }
 
-// Tempo row: (speed*7)>>8 selects steps per beat.
-export const DIVISIONS = ['/4', '/2', 'X1', 'X2', 'X4', 'X8', 'X16'];
-const STEPS_PER_BEAT = [0.25, 0.5, 1, 2, 4, 8, 16];
-export const divisionIndex = (speed) => Math.min(6, Math.max(0, (speed * 7) >> 8));
+// Tempo row: the firmware's seven zones of the speed byte ((speed*7)>>8),
+// and on the web X3 (4 November, the user's request: three steps a beat,
+// eighth-note triplets) cut from the top of the X2 zone. The value the page
+// stores for each division (SPEEDS) is the middle of its firmware zone, so
+// saved presets and the firmware keep their divisions; X3 is 142.
+export const DIVISIONS = ['/4', '/2', 'X1', 'X2', 'X3', 'X4', 'X8', 'X16'];
+const STEPS_PER_BEAT = [0.25, 0.5, 1, 2, 3, 4, 8, 16];
+const ZONE_START = [0, 37, 74, 110, 138, 147, 183, 220];
+const SPEEDS = [18, 54, 91, 128, 142, 164, 201, 237];
+export const divisionIndex = (speed) => { let i = ZONE_START.length - 1; while (i > 0 && speed < ZONE_START[i]) i--; return i; };
 export const stepsPerBeat = (speed) => STEPS_PER_BEAT[divisionIndex(speed)];
-export const speedForDivision = (index) => Math.trunc((index * 256 + 128) / 7);
+export const speedForDivision = (index) => SPEEDS[index];
 
 // Results are indices into the played stack (trillo::Sequence).
 export class Sequence {
