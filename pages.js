@@ -5,7 +5,7 @@
 // The web version has no encoder: editable cards carry < > arrows and every
 // page returns its mouse regions ({x, y, w, h, step, click, select}).
 
-import { COLOR, drawText, textWidth } from './display.js?v=00a0382bc5';
+import { COLOR, drawText, textWidth } from './display.js?v=6f78effb89';
 
 const ARROW_W = 22;
 
@@ -130,6 +130,142 @@ export function drawListPage(ctx, title, menu, items, right, back) {
   header(ctx, title, right, back);
   const regions = rows(ctx, menu, items);
   if (back) regions.push({ x: 0, y: 0, w: 240, h: 46, click: back });
+  return regions;
+}
+
+// ---- Arpeggio page: the Euclidean rhythm as a ring ("Orbit", 4 November,
+// the user's choice among three drafts; colours of the other pages). Hits
+// are discs sized by their humanized pressure and moved by the swing (a
+// ghost ring where they would sit straight), each with a gate trail that
+// fills while its note sounds; a comet on the rim follows the arpeggio and
+// the firing hit pulses. In the middle tempo, pattern and the pattern's
+// shape (the next 8 notes, taller = higher); in the corners steps, hits,
+// gate and human. The focused value sits on a cardFocus box with its label
+// in highlight blue, and turns blue the part of the drawing it moves. On
+// the instrument the encoder turns through the six and a press takes one
+// (cardEdit, value blue), as m.editing; here a click picks, wheel or drag
+// changes.
+
+// Pixel circles as fillCircle / drawCircle: a disc of diameter d, row by
+// row; a ring is the disc less a smaller one, t pixels inside.
+function spans(d, j) {
+  const r = d / 2, y = j + 0.5 - r, w = y * y < r * r ? 2 * Math.sqrt(r * r - y * y) : 0;
+  return [Math.round(r - w / 2), Math.round(r + w / 2)];
+}
+function disc(ctx, x, y, d, color) {
+  ctx.fillStyle = color;
+  const x0 = Math.round(x - d / 2), y0 = Math.round(y - d / 2);
+  for (let j = 0; j < d; j++) { const [a, b] = spans(d, j); if (b > a) ctx.fillRect(x0 + a, y0 + j, b - a, 1); }
+}
+function ring(ctx, x, y, d, t, color) {
+  ctx.fillStyle = color;
+  const x0 = Math.round(x - d / 2), y0 = Math.round(y - d / 2);
+  for (let j = 0; j < d; j++) {
+    const [a, b] = spans(d, j), k = j - t;
+    const [c, e] = k >= 0 && k < d - 2 * t ? spans(d - 2 * t, k) : [0, 0];
+    if (e <= c) { if (b > a) ctx.fillRect(x0 + a, y0 + j, b - a, 1); continue; }
+    ctx.fillRect(x0 + a, y0 + j, t + c - a, 1);
+    ctx.fillRect(x0 + t + e, y0 + j, b - t - e, 1);
+  }
+}
+function fill(ctx, x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+}
+
+export const ARP_PARAMS = ['tempo', 'pattern', 'gate', 'steps', 'hits', 'human'];
+
+// m: { values: six strings in ARP_PARAMS order, gate, human (0-100), steps,
+// focus (index), editing, on, rhythm: [{ hit, delay (steps), p }],
+// order: ranks of the next 8 notes, levels: notes held, ph: play position in
+// steps (null when stopped), age: ms since the playing hit fired (-1: none),
+// stepMs }. act: { select(i), step(i, n, fine) }.
+export function drawArpPage(ctx, m, act) {
+  const cx = 120, cy = 124, R = 68, r = m.rhythm, n = m.steps;
+  const focus = ARP_PARAMS[m.focus];
+  const tint = (id, color) => (focus === id ? COLOR.highlight : color);
+  const back = (id) => (focus === id ? (m.editing ? COLOR.cardEdit : COLOR.cardFocus) : null);
+  const ang = (i) => (-90 + 360 * i / n) * Math.PI / 180;
+  const at = (i, rad) => [cx + Math.cos(ang(i)) * rad, cy + Math.sin(ang(i)) * rad];
+  const ph = m.ph, cur = ph === null ? -1 : Math.floor(ph);
+  const fired = cur >= 0 && r[cur]?.hit && m.age >= 0;
+  // Rim: a plain 2 px circle (the user's choice over a dotted one), and a
+  // comet over it behind the play position.
+  ring(ctx, cx, cy, 2 * R + 2, 2, COLOR.rail);
+  const samples = Math.ceil(4 * Math.PI * R / n / 1.5); // two steps of arc, every 1.5 px
+  if (ph !== null) for (let a = 0; a < samples; a++) {
+    const behind = 2 * a / samples;
+    const [x, y] = at(ph - behind, R);
+    fill(ctx, x - 1, y - 1, 2, 2, behind < 0.3 ? COLOR.normal : behind < 1.2 ? tint('tempo', COLOR.secondary) : COLOR.rail);
+  }
+  { const [x, y] = at(0, R + 9); fill(ctx, x - 1, y - 3, 2, 6, COLOR.secondary); } // first step
+  // Rests.
+  r.forEach((s, i) => {
+    if (s.hit) return;
+    const [x, y] = at(i, R);
+    disc(ctx, x, y, 5, i === cur ? COLOR.secondary : tint('steps', COLOR.track));
+  });
+  // Gate trails: tenths of a step; the playing one fills as its note sounds.
+  const trail = Math.max(1, Math.round(m.gate / 10));
+  r.forEach((s, i) => {
+    if (!s.hit) return;
+    const lit = i === cur && fired ? Math.min(trail, Math.floor(m.age / m.stepMs * 10)) : 0;
+    for (let k = 1; k <= trail; k++) {
+      const [x, y] = at(i + s.delay + k / 10, R);
+      fill(ctx, x - 1, y - 1, 3, 3, k <= lit ? COLOR.normal : tint('gate', COLOR.secondary));
+    }
+  });
+  // Swing ghosts: where a moved hit would sit straight.
+  r.forEach((s, i) => {
+    if (!s.hit || s.delay < 0.04) return;
+    const [x, y] = at(i, R);
+    ring(ctx, x, y, 8, 1, tint('human', COLOR.rail));
+  });
+  // Hits, sized by their pressure; the one firing pulses for 160 ms.
+  r.forEach((s, i) => {
+    if (!s.hit) return;
+    const size = 7 + Math.round(8 * s.p / 255), on = i === cur && fired;
+    const [x, y] = at(i + s.delay, R);
+    disc(ctx, x, y, size, on ? COLOR.normal : tint('hits', m.on ? COLOR.meter : COLOR.secondary));
+    if (on && m.age < 160) ring(ctx, x, y, size + 6 + 2 * Math.round(m.age / 32), 2, m.age < 80 ? COLOR.normal : COLOR.secondary);
+  });
+  const regions = [];
+  // Tempo, pattern and the pattern's shape, on the ring's centre (y 93-156).
+  const centre = (i, y, size, color, h) => {
+    const id = ARP_PARAMS[i], text = m.values[i], w = textWidth(text, size), b = back(id);
+    if (b) fill(ctx, cx - w / 2 - 6, y - 5, w + 12, size * 5 + 10, b);
+    drawText(ctx, text, cx, y, size, focus === id ? (m.editing ? COLOR.highlight : COLOR.normal) : color, 'center');
+    if (focus === id) fill(ctx, cx - w / 2, y + size * 5 + 3, w, 2, COLOR.highlight);
+    regions.push({ x: 64, y: y - 8, w: 112, h, select: () => act.select(i), click: () => act.select(i), step: (s, fine) => act.step(i, s, fine) });
+  };
+  centre(0, 93, 5, COLOR.normal, 34);
+  centre(1, 127, 2, COLOR.secondary, 38);
+  const played = m.order.length ? m.playedHits % 8 : -1;
+  m.order.forEach((k, j) => {
+    const h = Math.max(2, Math.round((k + 1) * 10 / Math.max(1, m.levels)));
+    fill(ctx, 97 + j * 6, 156 - h, 4, h, fired && j === played ? COLOR.normal : tint('pattern', COLOR.rail));
+  });
+  // Corners: boxes 6 px from every edge, text 12 px from the sides; gate and
+  // human with a meter under the value.
+  const corner = (i, x, y, align, meter) => {
+    const id = ARP_PARAMS[i], v = m.values[i], b = back(id);
+    const w = Math.max(textWidth(id, 2), textWidth(v, 3), meter !== undefined ? 44 : 0) + 12;
+    const bx = align === 'right' ? x - w + 6 : x - 6, h = meter !== undefined ? 41 : 36;
+    if (b) fill(ctx, bx, y - 5, w, h, b);
+    drawText(ctx, id, x, y, 2, focus === id ? COLOR.highlight : COLOR.secondary, align);
+    drawText(ctx, v, x, y + 12, 3, focus === id && m.editing ? COLOR.highlight : COLOR.normal, align);
+    if (meter !== undefined) {
+      const mx = align === 'right' ? x - 44 : x;
+      fill(ctx, mx, y + 30, 44, 2, COLOR.track);
+      fill(ctx, mx, y + 30, Math.round(44 * meter), 2, focus === id ? COLOR.highlight : COLOR.meter);
+    }
+    const rx = align === 'right' ? 240 - 84 : 0, ry = y < 120 ? 0 : 240 - 50;
+    regions.push({ x: rx, y: ry, w: 84, h: 50, select: () => act.select(i), click: () => act.select(i), step: (s, fine) => act.step(i, s, fine) });
+  };
+  corner(3, 12, 11, 'left');
+  corner(4, 228, 11, 'right');
+  corner(2, 12, 198, 'left', m.gate / 100);
+  corner(5, 228, 198, 'right', m.human / 100);
   return regions;
 }
 

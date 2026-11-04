@@ -1,9 +1,9 @@
 // Spettro web: audio start-up and the wiring between panel, display,
 // PC keyboard, MIDI and the ESP32 port running in the AudioWorklet.
 
-import { Panel } from './panel.js?v=00a0382bc5';
-import { Display } from './display.js?v=00a0382bc5';
-import { Ui } from './ui.js?v=00a0382bc5';
+import { Panel } from './panel.js?v=6f78effb89';
+import { Display } from './display.js?v=6f78effb89';
+import { Ui } from './ui.js?v=6f78effb89';
 
 const panel = new Panel(document.getElementById('instrument'), {
   onControl: (id, v) => { ui.control(id, v); ui.relight(id); },
@@ -26,7 +26,7 @@ const TEST = new URLSearchParams(location.search).get('test');
 const overlay = document.getElementById('start');
 async function start() {
   overlay.classList.add('starting');
-  const engine = await fetch('spectrum.wasm?v=00a0382bc5');
+  const engine = await fetch('spectrum.wasm?v=6f78effb89');
   if (!engine.ok) throw new Error('motore audio non trovato');
   // The context runs at the device's own rate and the worklet resamples:
   // forcing 48 kHz on an interface at 44.1 kHz makes Safari resample, which
@@ -45,7 +45,7 @@ async function start() {
   }
   const [module] = await Promise.all([
     WebAssembly.compileStreaming(engine),
-    ctx.audioWorklet.addModule('engine-worklet.js?v=00a0382bc5'),
+    ctx.audioWorklet.addModule('engine-worklet.js?v=6f78effb89'),
   ]);
   const node = new AudioWorkletNode(ctx, 'spectrum-engine', {
     numberOfInputs: 1, outputChannelCount: [2], processorOptions: { module, engineRate: ENGINE_RATE, testTone: TEST === 'tone' },

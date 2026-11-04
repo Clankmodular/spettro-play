@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=00a0382bc5';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=00a0382bc5';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision } from './esp/trillo.js?v=00a0382bc5';
-import * as P from './pages.js?v=00a0382bc5';
-import { MODES, BANKS } from './display.js?v=00a0382bc5';
-import { Presets, SLOTS } from './presets.js?v=00a0382bc5';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=6f78effb89';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=6f78effb89';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure, Sequence } from './esp/trillo.js?v=6f78effb89';
+import * as P from './pages.js?v=6f78effb89';
+import { MODES, BANKS } from './display.js?v=6f78effb89';
+import { Presets, SLOTS } from './presets.js?v=6f78effb89';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -908,6 +908,8 @@ export class Ui {
 
   loopState() {
     const L = this.loop;
+    // An overdub of the note cycle records too (its length is already set).
+    if (L.armed && L.overdub) return 'recording';
     for (const lane of L.lanes.values()) if (!lane.length) return 'recording';
     return L.armed ? 'armed' : L.lanes.size ? 'playing' : 'idle';
   }
@@ -1299,6 +1301,7 @@ export class Ui {
 
   status(data) {
     this.state = data;
+    this.statusAt = now();
     // Drone start and end move the transpose fader: to the stutter step,
     // kept from the last drone (the worklet starts it at once), then back
     // to the transpose; the worklet stops the stutter.
@@ -1527,13 +1530,36 @@ export class Ui {
   // Stepping row of a list page.
   stepper(page, row) { return { step: (n, fine) => this.edit(page, row, n, fine) }; }
 
+  // The arp page (pages.js drawArpPage): the rhythm as a ring, played live
+  // from the worklet's position (status.arp, run on to now).
   drawArp(ctx) {
-    const pr = this.pr, s = (row) => this.stepper('arp', row);
-    return P.drawListPage(ctx, 'arpeggio', this.menus.arp, [
-      ['tempo', DIVISIONS[divisionIndex(pr.trilloSpeed)], s(0)], ['pattern', PATTERNS[pr.trilloPattern], s(1)],
-      ['hold', `${pr.trilloHoldPercent}%`, s(2)], ['steps', `${pr.trilloSteps}`, s(3)],
-      ['hits', `${pr.trilloHits}`, s(4)], ['human', `${pr.trilloHumanize}%`, s(5)],
-    ], pr.trilloOn ? 'on' : 'off');
+    const pr = this.pr, menu = this.menus.arp, st = this.state?.status;
+    const steps = clamp(pr.trilloSteps ?? 8, 1, MAX_ARP_STEPS), hits = clamp(pr.trilloHits ?? steps, 1, steps);
+    const human = pr.trilloHumanize || 0;
+    const rhythm = Array.from({ length: steps }, (_, i) => ({
+      hit: euclidHit(steps, hits, i), delay: humanDelay(human, i, 1), p: human ? humanPressure(human, i, 255) : 255,
+    }));
+    const a = st?.arp, stack = st?.stack || [];
+    const stepMs = a?.period || 60000 / (this.bpm || 120) / stepsPerBeat(pr.trilloSpeed);
+    let ph = null, age = -1, playedHits = 0;
+    if (pr.trilloOn && a && a.next !== null && a.step > 0 && stack.length && a.period) {
+      const t = a.time + (now() - (this.statusAt || now()));
+      const since = Math.max(0, t - (a.next - a.period)) / a.period;
+      ph = ((a.step - 1) % steps + Math.min(since, 1.99)) % steps;
+      const cur = Math.floor(ph);
+      age = (ph - cur - rhythm[cur].delay) * a.period;
+      playedHits = rhythm.slice(0, cur + 1).filter((s) => s.hit).length - 1;
+    }
+    // The pattern's shape: the next 8 notes of the held ones, as ranks.
+    const f = this.keyFrequencies(), sorted = [...stack].sort((x, y) => f[x] - f[y]), seq = new Sequence(0x5bd1e995);
+    const order = [];
+    for (let i = 0; i < 8 && stack.length; i++) order.push(sorted.indexOf(stack[seq.next(pr.trilloPattern, stack, (k) => f[k])]));
+    return P.drawArpPage(ctx, {
+      values: [DIVISIONS[divisionIndex(pr.trilloSpeed)], PATTERNS[pr.trilloPattern], `${pr.trilloHoldPercent}%`,
+        `${steps}`, `${hits}`, `${human}%`],
+      gate: pr.trilloHoldPercent, human, steps, focus: menu.row, editing: false, on: pr.trilloOn,
+      rhythm, order, levels: stack.length, ph, age, stepMs, playedHits,
+    }, { select: (i) => { menu.row = i; }, step: (i, n, fine) => this.edit('arp', i, n, fine) });
   }
 
   // Rules of one pad of the arpeggio (pad held with the latched arpeggio).

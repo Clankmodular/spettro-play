@@ -5,8 +5,8 @@
 // panel state lives in `pr` with the firmware field names and scales; every
 // frame is written as in updateBuffer() (esp32/src/spectrum.cpp).
 
-import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=00a0382bc5';
-import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=00a0382bc5';
+import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=6f78effb89';
+import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=6f78effb89';
 
 export const FRAME = 128;
 const VOICES = 5;
@@ -1315,6 +1315,9 @@ export class Controller {
       trilloOn: this.pr.trilloOn,
       arpKey: this.arpKey,
       arpPaused: !!this.arpPaused,
+      // Web: where the arpeggio is, for the arp page (steps so far, the next
+      // one's time and the step length, on the controller's clock).
+      arp: { step: this.arpStep, next: this.arpNext, period: this.arpPeriod || 0, time: this.timeMs },
       octave: this.pr.octaveIndex,
       octaveSeq: this.octaveSeq || 0,
       bpm: this.bpm,
