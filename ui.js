@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=5988906657';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=5988906657';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=5988906657';
-import * as P from './pages.js?v=5988906657';
-import { MODES, BANKS } from './display.js?v=5988906657';
-import { Presets, SLOTS } from './presets.js?v=5988906657';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=0c220bf317';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=0c220bf317';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=0c220bf317';
+import * as P from './pages.js?v=0c220bf317';
+import { MODES, BANKS } from './display.js?v=0c220bf317';
+import { Presets, SLOTS } from './presets.js?v=0c220bf317';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -90,11 +90,14 @@ function blendToPanel(value) {
   return lower ? margin + d : full - margin - d;
 }
 
-// Band-envelope time ratios (band_envelope.h Ratios) for the editor graph.
-function bandRatio(shape, band) {
-  const x = band / 7;
-  const raw = [1, 1 - x, x, 1 - Math.abs(2 * x - 1), Math.abs(2 * x - 1)][shape] ?? 1;
-  return shape ? Math.pow(2, 4 * (raw - 1)) : 1;
+// Band-envelope time ratios as band_envelope.h Ratios, for the envelope
+// page: 1/16..1 over the bands in use, the slowest exactly 1; bands not in
+// use take the slowest time.
+function bandRatios(shape, count) {
+  const raw = (b) => { const x = count > 1 ? b / (count - 1) : 0; return [1, 1 - x, x, 1 - Math.abs(2 * x - 1), Math.abs(2 * x - 1)][shape] ?? 1; };
+  let peak = 0;
+  for (let b = 0; b < count; b++) peak = Math.max(peak, raw(b));
+  return Array.from({ length: 8 }, (_, b) => (!shape || b >= count || peak <= 0 || count <= 1 ? 1 : 2 ** (4 * (raw(b) / peak - 1))));
 }
 const SUSTAIN_CHOICES = 17;
 const sustainMask = (c) => (c === 0 ? 0 : c <= 7 ? (1 << c) - 1 : c === 8 ? 0xff : c <= 15 ? (0xff << (16 - c)) & 0xff : 0xff);
@@ -1574,12 +1577,34 @@ export class Ui {
     return rule.velocity ?? Math.round(this.keyPlayed[key] / 2.55);
   }
 
+  // The envelope page (pages.js drawEnvelopePage): attack and release times
+  // of each band as bars, sustain on the axis, filled live with the band
+  // levels the engine reports (up while a level rises, down while it falls).
   drawEnvelope(ctx) {
-    const pr = this.pr, s = (row) => this.stepper('envelope', row);
-    return P.drawListPage(ctx, 'envelope', this.menus.envelope, [
-      ['attack', SHAPES[pr.bandAttackShape], s(0)], ['sustain', sustainLabel(sustainChoice(pr.bandSustainMask)), s(1)],
-      ['release', SHAPES[pr.bandReleaseShape], s(2)],
-    ]);
+    const pr = this.pr, menu = this.menus.envelope;
+    const bands = clamp(Math.round(pr.spectralBands), 0, 255);
+    const amount = 1 + Math.min(1, bands / 128) * 7, lowCut = bands > 128 ? (bands - 128) / 127 * 7 : 0;
+    const count = Math.ceil(amount - 1e-6);
+    const present = Array.from({ length: 8 }, (_, i) => (i === 0 ? 1 : clamp(amount - i, 0, 1)) * clamp(i + 1 - lowCut, 0, 1));
+    const levels = this.state.bandLevels || [];
+    const prev = this.envLevels || (this.envLevels = new Array(8).fill(0));
+    const up = this.envUp || (this.envUp = new Array(8).fill(true));
+    const live = levels.some((l) => l > 0.02) ? Array.from({ length: 8 }, (_, i) => {
+      const l = levels[i] || 0;
+      // A level that rises is an attack; a few hundredths of jitter are not a turn.
+      if (l > prev[i] + 0.01) up[i] = true; else if (l < prev[i] - 0.01) up[i] = false;
+      if (l < 0.02) up[i] = true;
+      prev[i] = l;
+      return { level: l, up: up[i] };
+    }) : null;
+    if (!live) { prev.fill(0); up.fill(true); }
+    const seconds = (v, lo, hi) => lo + (v / 255) ** 2 * (hi - lo); // MapSquared01 in the firmware
+    return P.drawEnvelopePage(ctx, {
+      values: [SHAPES[pr.bandAttackShape], sustainLabel(sustainChoice(pr.bandSustainMask)), SHAPES[pr.bandReleaseShape]],
+      focus: menu.row, editing: false, sustain: pr.bandSustainMask, present, live,
+      attack: bandRatios(pr.bandAttackShape, count), release: bandRatios(pr.bandReleaseShape, count),
+      attackSeconds: seconds(clamp(pr.attack, 0, 255), 0.0005, 4), releaseSeconds: seconds(clamp(pr.release, 0, 255), 0.01, 2.5),
+    }, { select: (i) => { menu.row = i; }, step: (i, n, fine) => this.edit('envelope', i, n, fine) });
   }
 
   drawSystem(ctx) {

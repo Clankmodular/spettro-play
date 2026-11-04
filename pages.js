@@ -5,7 +5,7 @@
 // The web version has no encoder: editable cards carry < > arrows and every
 // page returns its mouse regions ({x, y, w, h, step, click, select}).
 
-import { COLOR, drawText, textWidth } from './display.js?v=5988906657';
+import { COLOR, drawText, textWidth } from './display.js?v=0c220bf317';
 
 const ARROW_W = 22;
 
@@ -268,6 +268,62 @@ export function drawArpPage(ctx, m, act) {
   corner(4, 223, 16, 'right');
   corner(2, 17, 189, 'left', m.gate / 100);
   corner(5, 223, 189, 'right', m.human / 100);
+  return regions;
+}
+
+// ---- Envelope page: the band envelopes as a prism ("Prisma", 4 November,
+// the user's choice among three drafts). A column per band, low on the
+// left: the bar above the axis is its attack time, the one below its
+// release time (a shape becomes a silhouette: saw a staircase, triangle a
+// peak), the dot on the axis its sustain (full: held). While notes sound the
+// bars fill white with the band's level, up while it rises, down while it
+// falls. Attack, sustain and release in the corners as on the arp page, the
+// fader times bottom right. Encoder as there: turn picks, press takes.
+export const ENVELOPE_PARAMS = ['attack', 'sustain', 'release'];
+
+// m: { values: three strings, focus, editing, attack[8], release[8] (time
+// ratios 1/16..1), sustain (mask), present[8] (0..1), live: [{ level, up }]
+// or null, attackSeconds, releaseSeconds }. act: { select(i), step(i, n, fine) }.
+export function drawEnvelopePage(ctx, m, act) {
+  const axis = 120, focus = ENVELOPE_PARAMS[m.focus];
+  const tint = (id, color) => (focus === id ? COLOR.highlight : color);
+  const back = (i) => (m.focus === i ? (m.editing ? COLOR.cardEdit : COLOR.cardFocus) : null);
+  // Four octaves of time, 6 to 50 px.
+  const h = (ratio) => 6 + Math.round(44 * (Math.log2(ratio) + 4) / 4);
+  fill(ctx, 17, axis - 1, 206, 2, COLOR.rail);
+  for (let b = 0; b < 8; b++) {
+    const x = 120 + (b - 3.5) * 26;
+    if (m.present[b] < 0.5) { fill(ctx, x - 7, axis - 4, 14, 2, COLOR.track); fill(ctx, x - 7, axis + 2, 14, 2, COLOR.track); continue; }
+    const ha = h(m.attack[b]), hr = h(m.release[b]);
+    fill(ctx, x - 7, axis - 8 - ha, 14, ha, tint('attack', COLOR.rail));
+    fill(ctx, x - 7, axis + 8, 14, hr, tint('release', COLOR.rail));
+    const live = m.live?.[b];
+    if (live && live.level > 0.02) {
+      const level = Math.min(1, live.level);
+      if (live.up) { const k = Math.round(ha * level); fill(ctx, x - 7, axis - 8 - k, 14, k, COLOR.normal); }
+      else { const k = Math.round(hr * level); fill(ctx, x - 7, axis + 8, 14, k, COLOR.normal); }
+    }
+    if ((m.sustain >> b) & 1) disc(ctx, x, axis, 9, tint('sustain', COLOR.meter));
+    else { disc(ctx, x, axis, 9, '#000'); ring(ctx, x, axis, 9, 2, tint('sustain', COLOR.secondary)); }
+  }
+  const regions = [];
+  // Corners: text 17 px from the sides and 16 from top and bottom, boxes
+  // 3 px around it, value 16 px under its label (as the arp page).
+  const corner = (i, x, y, align) => {
+    const id = ENVELOPE_PARAMS[i], v = m.values[i], b = back(i);
+    const w = Math.max(textWidth(id, 2), textWidth(v, 3)) + 6, bx = align === 'right' ? x - w + 3 : x - 3;
+    if (b) fill(ctx, bx, y - 5, w, 40, b);
+    drawText(ctx, id, x, y, 2, focus === id ? COLOR.highlight : COLOR.secondary, align);
+    drawText(ctx, v, x, y + 16, 3, focus === id && m.editing ? COLOR.highlight : COLOR.normal, align);
+    const rx = align === 'right' ? 240 - 120 : 0, ry = y < 120 ? 0 : 240 - 54;
+    regions.push({ x: rx, y: ry, w: 120, h: 54, select: () => act.select(i), click: () => act.select(i), step: (s, fine) => act.step(i, s, fine) });
+  };
+  corner(0, 17, 16, 'left');
+  corner(1, 223, 16, 'right');
+  corner(2, 17, 189, 'left');
+  const secs = (s) => (s < 0.995 ? `${Math.round(s * 1000)}ms` : `${s.toFixed(s < 9.95 ? 1 : 0)}s`);
+  drawText(ctx, `a ${secs(m.attackSeconds)}`, 223, 195, 2, COLOR.secondary, 'right');
+  drawText(ctx, `r ${secs(m.releaseSeconds)}`, 223, 211, 2, COLOR.secondary, 'right');
   return regions;
 }
 

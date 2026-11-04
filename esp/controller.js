@@ -5,8 +5,8 @@
 // panel state lives in `pr` with the firmware field names and scales; every
 // frame is written as in updateBuffer() (esp32/src/spectrum.cpp).
 
-import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=5988906657';
-import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=5988906657';
+import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=0c220bf317';
+import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=0c220bf317';
 
 export const FRAME = 128;
 const VOICES = 5;
