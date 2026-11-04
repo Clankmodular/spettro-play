@@ -1,7 +1,7 @@
 // Preset memory: 32 banks of 24 slots (the instrument has 12). Bank 0 is the
 // code-backed factory bank; user banks 1..31 live in this browser.
 
-import { FACTORY } from './factory-presets.js';
+import { FACTORY } from './factory-presets.js?v=510a2a021f';
 
 const KEY = 'spettro.presets.v1';
 export const SLOTS = 24;

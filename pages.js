@@ -5,7 +5,7 @@
 // The web version has no encoder: editable cards carry < > arrows and every
 // page returns its mouse regions ({x, y, w, h, step, click, select}).
 
-import { COLOR, drawText, textWidth } from './display.js';
+import { COLOR, drawText, textWidth } from './display.js?v=510a2a021f';
 
 const ARROW_W = 22;
 

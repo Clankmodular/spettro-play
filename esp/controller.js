@@ -5,8 +5,8 @@
 // panel state lives in `pr` with the firmware field names and scales; every
 // frame is written as in updateBuffer() (esp32/src/spectrum.cpp).
 
-import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js';
-import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, MAX_ARP_STEPS } from './trillo.js';
+import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=510a2a021f';
+import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=510a2a021f';
 
 export const FRAME = 128;
 const VOICES = 5;
@@ -93,7 +93,7 @@ export function defaultPreset() {
 // the firmware tank and no LFO on detail. reverbDetail (31 October, an hour)
 // ran the other way: 0 was the tank.
 export function migratePreset(pr) {
-  return withArpRhythm(withLfoPerControl(withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr)))))));
+  return withArpVelocity(withArpRhythm(withLfoPerControl(withoutOctaveLfo(withBipolarBands(withLfoDepth(withKeyboardBase(migrateReverb(pr))))))));
 }
 
 // Web: one LFO per control (3 November). Older presets had one LFO for every
@@ -533,11 +533,11 @@ export class Controller {
     // A pad with a rule plays only on its cycles (x of every y) and moves by
     // its accumulator each time it plays.
     if (key < KEYS && (!rule || this.arpRulePlays(rule))) {
-      // A pad's own velocity (rule.vel, %) in place of the played pressure;
-      // the humanize works on either.
-      const vel = rule?.vel ? clamp(Math.round(rule.vel * 2.55), 1, 255) : 0;
-      const base = vel || this.keyAftertouch[key];
-      const pressure = human ? humanPressure(human, this.arpStep, base) : vel || undefined;
+      // A pad's own velocity (rule.velocity, 0-100) in place of the played
+      // pressure (0 = silent); the humanize works on either.
+      const vel = rule?.velocity != null ? clamp(Math.round(rule.velocity * 2.55), 0, 255) : undefined;
+      const base = vel ?? this.keyAftertouch[key];
+      const pressure = human && base ? humanPressure(human, this.arpStep, base) : vel;
       this.noteOnKey(key, true, pressure, rule ? this.arpAccumulate(key, rule) : 0);
       this.arpKey = key;
       // Gate length uses the interval to the next (humanized) onset.

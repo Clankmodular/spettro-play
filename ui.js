@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision } from './esp/trillo.js';
-import * as P from './pages.js';
-import { MODES, BANKS } from './display.js';
-import { Presets, SLOTS } from './presets.js';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=510a2a021f';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=510a2a021f';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision } from './esp/trillo.js?v=510a2a021f';
+import * as P from './pages.js?v=510a2a021f';
+import { MODES, BANKS } from './display.js?v=510a2a021f';
+import { Presets, SLOTS } from './presets.js?v=510a2a021f';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -62,7 +62,7 @@ const LOOP_BARS = [1, 2, 3, 4, 6, 8, 12, 16]; // quantize choices (4 beats a bar
 const ARP_PLAYS = []; for (let y = 1; y <= 8; y++) for (let x = 1; x <= y; x++) ARP_PLAYS.push([x, y]);
 const ARP_MODES = ['clip', 'wrap', 'pendulum'];
 // vel: the note's pressure in % (0: as played; web, asked by the user).
-const ARP_RULE = { play: [1, 1], acc: 0, limit: 5, mode: 'clip', vel: 0 };
+const ARP_RULE = { play: [1, 1], acc: 0, limit: 5, mode: 'clip' };
 // Linear mix of two #rrggbb colours, t = 0..1 towards b.
 function mixColor(a, b, t) {
   const c = (hex, i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
@@ -117,6 +117,7 @@ export class Ui {
     this.systemPage = 'system';
     this.midiChannel = 0;
     this.lastKey = 16;
+    this.keyPlayed = new Uint8Array(KEYS).fill(255); // pressure each pad was last played with
     this.customFreq = null;  // per-key edits, null = from the scale
     this.buttons = {};
     this.taps = [];
@@ -732,10 +733,10 @@ export class Ui {
       if (row === 1) rule.acc = clamp(rule.acc + step, -12, 12);
       if (row === 2) rule.limit = clamp(rule.limit + step, 1, 24);
       if (row === 3) rule.mode = ARP_MODES[(ARP_MODES.indexOf(rule.mode) + step + 3) % 3];
-      if (row === 4) rule.vel = clamp(rule.vel + 5 * step, 0, 100);
+      if (row === 4) rule.velocity = clamp(this.arpVelocity(key, rule) + step, 0, 100);
       const rules = { ...pr.arpRules };
       // A rule back to the defaults is no rule.
-      if (rule.play[1] === 1 && !rule.acc && !rule.vel) delete rules[key]; else rules[key] = rule;
+      if (rule.play[1] === 1 && !rule.acc && rule.velocity == null) delete rules[key]; else rules[key] = rule;
       this.set({ arpRules: rules });
       return;
     }
@@ -825,9 +826,10 @@ export class Ui {
         this.arpNoteTimer = setTimeout(() => { this.arpNoteKey = index; this.openPage('arpnote'); }, 400);
       }
       const p = pressure == null ? 255 : this.touchPressure(pressure);
+      this.keyPlayed[index] = p;
       this.call('keyOn', index, p);
       this.loopRecordNote();
-    } else if (action === 'pressure') this.call('keyPressure', index, this.touchPressure(pressure));
+    } else if (action === 'pressure') this.call('keyPressure', index, this.keyPlayed[index] = this.touchPressure(pressure));
     else { clearTimeout(this.arpNoteTimer); this.call('keyOff', index); this.loopRecordNote(); }
   }
 
@@ -1542,8 +1544,13 @@ export class Ui {
     return P.drawListPage(ctx, `pad ${key + 1}`, m, [
       ['play', `${rule.play[0]}:${rule.play[1]}`, s(0)], ['acc', `${rule.acc > 0 ? '+' : ''}${rule.acc}`, s(1)],
       ['limit', `${rule.limit}`, s(2)], ['mode', rule.mode, s(3)],
-      ['vel', rule.vel ? `${rule.vel}%` : 'played', s(4)],
+      ['vel', `${this.arpVelocity(key, rule)}`, s(4)],
     ], 'arp', () => this.openPage('analyser'));
+  }
+
+  // A pad's arpeggio velocity, 0-100: its own, or how it was played.
+  arpVelocity(key, rule) {
+    return rule.velocity ?? Math.round(this.keyPlayed[key] / 2.55);
   }
 
   drawEnvelope(ctx) {

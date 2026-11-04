@@ -22,13 +22,15 @@ function noise(step, salt) {
   return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
 }
 
-// Humanize: the odd steps late by up to 12 % of a step (microswing) and
-// every step by up to 8 % more at random; the pressure down by up to 60 %
-// at random (on Spettro it opens the bands: the timbre moves too).
+// Humanize: the odd steps late by up to 22 % of a step (swing; a triplet
+// feel is 33 %) and every step by up to 12 % more at random; the pressure
+// down by up to 80 % at random (about -13 dB; on Spettro it opens the bands:
+// the timbre moves too). Stronger since 4 November (the user did not hear
+// it: 12 % + 8 % and 60 % moved the notes by 15 % and 3 dB at most).
 export const humanDelay = (human, step, period) =>
-  period * human / 100 * ((step & 1) * 0.12 + noise(step, 0x51) * 0.08);
+  period * human / 100 * ((step & 1) * 0.22 + noise(step, 0x51) * 0.12);
 export const humanPressure = (human, step, pressure) =>
-  Math.max(1, Math.round(pressure * (1 - human / 100 * 0.6 * noise(step, 0xa7))));
+  Math.max(1, Math.round(pressure * (1 - human / 100 * 0.8 * noise(step, 0xa7))));
 
 // The groove templates of 31 October, for older presets: their nearest
 // rhythm and humanize (straight 0, euclid 7 of 16, poly 3 a rest every 3,
@@ -40,6 +42,16 @@ export function withArpRhythm(pr) {
   const { trilloGroove, ...rest } = pr;
   const [trilloSteps, trilloHits, trilloHumanize] = GROOVE_RHYTHM[trilloGroove] || GROOVE_RHYTHM[0];
   return { ...rest, trilloSteps, trilloHits, trilloHumanize };
+}
+
+// Per-pad velocity of the arpeggio's rules: `vel` (4 November, 5-100 %, 0
+// = as played) became `velocity` 0-100 (the user: a value from 0 to 100,
+// starting from how the pad was played); no field = as played.
+export function withArpVelocity(pr) {
+  if (!pr.arpRules || !Object.values(pr.arpRules).some((r) => r && 'vel' in r)) return pr;
+  const arpRules = {};
+  for (const [key, { vel, ...rule }] of Object.entries(pr.arpRules)) arpRules[key] = vel ? { ...rule, velocity: vel } : rule;
+  return { ...pr, arpRules };
 }
 
 // Tempo row: (speed*7)>>8 selects steps per beat.

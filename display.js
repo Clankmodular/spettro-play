@@ -7,7 +7,7 @@
 // device pixels so the text stays crisp; the analyser curves are vector
 // paths sampled every half unit.
 
-import { ORG01 } from './org01.js';
+import { ORG01 } from './org01.js?v=510a2a021f';
 
 export const SIZE = 240;
 // The firmware leaves 12-16 px margins; the web screen shows the useful area

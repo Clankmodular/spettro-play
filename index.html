@@ -7,14 +7,14 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23262626'/%3E%3Cpath d='M3 11V8a2 2 0 0 1 4 0v3M7 11V8a2 2 0 0 1 4 0v3M11 11V8a1.5 1.5 0 0 1 3 0v3' fill='none' stroke='%23e8e6e1' stroke-width='1.2'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=510a2a021f">
 </head>
 <body>
   <div class="stage">
     <header class="bar">
       <div class="brand-row">
         <div class="brand" role="img" aria-label="Clank Spettro"></div>
-        <span class="version" title="Versione della pagina: cambia a ogni pubblicazione">v 69 · 4/11</span>
+        <span class="version" title="Versione della pagina: cambia a ogni pubblicazione">v 70 · 4/11</span>
       </div>
       <div class="tools">
         <button id="guide-open" type="button" aria-haspopup="dialog" title="How to play Spettro">guide</button>
@@ -85,13 +85,13 @@
             delay and reverb, so their echoes and tails build on the repeats, while whatever else you play sounds over it. The fader has 12 steps from the bottom (one violet LED each): the plain drone,
             then 1/2, 1/4., 1/4, 1/8., 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/64 of the beat; the screen shows the step.
             Letting go of ❄ stops it and gives the fader back to transpose; the step is kept, so the next drone stutters again at once.</li>
-          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page (tempo division, pattern, gate length, rhythm). <b>steps</b> and <b>hits</b> make a Euclidean rhythm: the hits spread as evenly as they go over the steps (3 of 8 is the tresillo, hits = steps plays every step); on a rest the pattern waits, so its notes keep their order. <b>human</b> (humanize) moves pressure and time: the pressure drops at random (and opens the bands less), the odd steps come a little late (microswing) and every step drifts a touch.
+          <li><b>arp</b> — tap: arpeggiator on or off. Long press: the arpeggio page (tempo division, pattern, gate length, rhythm). <b>steps</b> and <b>hits</b> make a Euclidean rhythm: the hits spread as evenly as they go over the steps (3 of 8 is the tresillo, hits = steps plays every step); on a rest the pattern waits, so its notes keep their order. <b>human</b> (humanize) moves pressure and time: the pressure drops at random (and opens the bands less), the odd steps come late (swing) and every step drifts a little.
             The pads of the arpeggio's notes glow dim <span class="sw c"></span> turquoise, the one playing yellow.
             With the arpeggio latched by Hold, hold one of its pads: that note's page. <b>play</b> — on which cycles it sounds
             (1:1 every pass of the pattern, 1:2 the first of every two, 2:2 the second…); <b>acc</b> — scale degrees it moves
             each time it plays (− down), <b>limit</b> — how far, <b>mode</b> — <b>clip</b> back to the start past the limit,
             <b>wrap</b> past +limit on from −limit (it keeps going round), <b>pendulum</b> back and forth; <b>vel</b> — its own velocity,
-            5 to 100 % (played: as you pressed it; the humanize works on it too). Saved with the preset.
+            0 to 100: it shows how you played the pad, change it from there (the humanize works on it too). Saved with the preset.
             With the arpeggio on, Hold pauses and restarts it: switched off, the arpeggio stops and keeps its notes (arp LED blinking); Hold on again restarts them, a new note starts a new arpeggio without Hold.</li>
           <li><b>clock</b> — tap it in time to set the tempo; long press: the tempo page. The LED blinks on the beat.</li>
         </ul>
@@ -253,6 +253,6 @@
     </div>
   </div>
 
-  <script type="module" src="main.js"></script>
+  <script type="module" src="main.js?v=510a2a021f"></script>
 </body>
 </html>
