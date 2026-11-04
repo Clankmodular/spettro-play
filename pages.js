@@ -87,7 +87,7 @@ export function drawLoopPage(ctx, m, act) {
     const open = new Map(), seen = new Set();
     const bar = (key, from, to) => ctx.fillRect(px(from), Y + 6 + key * 4 + 1, Math.max(2, px(to) - px(from)), 3);
     for (const [at, key, p, target] of pts) {
-      if (p === -1 || p === -3) continue; // a bend (the note stays on its row) or an octave change
+      if (p === -1 || p <= -3) continue; // a bend (the note stays on its row) or an octave change
       // A release with no note before it: an overdubbed note across the top.
       if (p === 0 && !open.has(key) && !seen.has(key)) bar(key, 0, at);
       seen.add(key);
@@ -113,7 +113,8 @@ export function drawLoopPage(ctx, m, act) {
 }
 
 // Quantize a cycle (loop page, pad held): how many bars it should last; yes
-// stretches it to them and starts it on the beat, no leaves it.
+// stretches it to them from where it is (nudged by under half a beat so its
+// top falls on a beat), no leaves it.
 export function drawQuantizePage(ctx, m, act) {
   header(ctx, 'quantize', m.name, act.no);
   card(ctx, 12, 54, 216, 70, 'bars', m.bars, 'focus', 4, true);

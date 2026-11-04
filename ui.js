@@ -61,7 +61,8 @@ const LOOP_BARS = [1, 2, 3, 4, 6, 8, 12, 16]; // quantize choices (4 beats a bar
 // Arpeggio rules per pad: x of every y cycles (y up to 8), accumulator modes.
 const ARP_PLAYS = []; for (let y = 1; y <= 8; y++) for (let x = 1; x <= y; x++) ARP_PLAYS.push([x, y]);
 const ARP_MODES = ['clip', 'wrap', 'pendulum'];
-const ARP_RULE = { play: [1, 1], acc: 0, limit: 5, mode: 'clip' };
+// vel: the note's pressure in % (0: as played; web, asked by the user).
+const ARP_RULE = { play: [1, 1], acc: 0, limit: 5, mode: 'clip', vel: 0 };
 // Linear mix of two #rrggbb colours, t = 0..1 towards b.
 function mixColor(a, b, t) {
   const c = (hex, i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16);
@@ -500,9 +501,10 @@ export class Ui {
       return;
     }
     // The envelope and arp menus close on any other button, which then acts as
-    // usual; the octave buttons leave them open (web, asked by the user).
+    // usual; the octave buttons leave them open, and Hold leaves every page
+    // open (web, asked by the user).
     const owner = { envelope: 'envelope', arp: 'arp', arpnote: 'arp', loops: 'loop', lfos: 'lfoAssign' }[this.page];
-    const keepsMenu = (id.startsWith('oct') && (this.page === 'arp' || this.page === 'arpnote' || this.page === 'envelope'))
+    const keepsMenu = id === 'hold' || (id.startsWith('oct') && (this.page === 'arp' || this.page === 'arpnote' || this.page === 'envelope'))
       || (id === 'lfoWave' && this.page === 'lfos');
     if (owner && down && id !== owner && !keepsMenu) this.openPage('analyser');
 
@@ -730,9 +732,10 @@ export class Ui {
       if (row === 1) rule.acc = clamp(rule.acc + step, -12, 12);
       if (row === 2) rule.limit = clamp(rule.limit + step, 1, 24);
       if (row === 3) rule.mode = ARP_MODES[(ARP_MODES.indexOf(rule.mode) + step + 3) % 3];
+      if (row === 4) rule.vel = clamp(rule.vel + 5 * step, 0, 100);
       const rules = { ...pr.arpRules };
       // A rule back to the defaults is no rule.
-      if (rule.play[1] === 1 && !rule.acc) delete rules[key]; else rules[key] = rule;
+      if (rule.play[1] === 1 && !rule.acc && !rule.vel) delete rules[key]; else rules[key] = rule;
       this.set({ arpRules: rules });
       return;
     }
@@ -823,9 +826,9 @@ export class Ui {
       }
       const p = pressure == null ? 255 : this.touchPressure(pressure);
       this.call('keyOn', index, p);
-      this.loopRecordNote(index, p);
+      this.loopRecordNote();
     } else if (action === 'pressure') this.call('keyPressure', index, this.touchPressure(pressure));
-    else { clearTimeout(this.arpNoteTimer); this.call('keyOff', index); this.loopRecordNote(index, 0); }
+    else { clearTimeout(this.arpNoteTimer); this.call('keyOff', index); this.loopRecordNote(); }
   }
 
   // Touch bend from pad index towards target, pos 0..1; off with the
@@ -835,14 +838,14 @@ export class Ui {
   padBend(index, target, pos) {
     if (!this.bendAllowed()) return;
     this.call('keyBend', index, target, pos);
-    this.loopRecordNote(index, -1, target, pos);
+    this.loopRecordNote();
   }
   // The finger reached the neighbour: the note moves there. False when the
   // bend is off, so the panel keeps the note on its pad.
   padSlide(index, target) {
     if (!this.bendAllowed()) return false;
     this.call('keySlide', index, target);
-    this.loopRecordNote(index, -2, target);
+    this.loopRecordNote();
     this.lastKey = target;
     return true;
   }
@@ -912,16 +915,18 @@ export class Ui {
     // Double tap (second within 320 ms, nothing moved) clears every cycle.
     L.taps = L.taps.filter((x) => t - x < 320);
     if (L.taps.length && !L.movedSinceTap) {
-      L.taps = []; L.armed = false; L.lanes.clear(); L.overdub = null;
+      L.taps = []; L.armed = false; L.lanes.clear(); L.overdub = false;
+      this.call('noteRecCancel');
       for (const id in WORKLET_LANES) this.sendLoop(id, null);
       this.display.show('loop cleared', 900);
       return;
     }
     L.taps.push(t); L.movedSinceTap = false;
-    if (!L.armed) { L.armed = true; L.completed.clear(); L.overdub = null; return; }
-    // The second press closes the open cycles at once.
-    L.armed = false;
-    this.loopOverdubEnd(t);
+    if (!L.armed) { L.armed = true; L.completed.clear(); L.overdub = false; this.call('noteRecArm', this.loopMaxMs()); return; }
+    // The second press closes the open cycles at once (the note take in the
+    // worklet: its points come back with status.rec).
+    L.armed = false; L.overdub = false;
+    this.call('noteRecClose');
     let longest = 0;
     for (const [id, lane] of L.lanes) {
       if (lane.length) continue;
@@ -935,108 +940,68 @@ export class Ui {
     lane.length = clamp(end - lane.origin, 1, this.loopMaxMs());
     lane.points = lane.points.filter(([at]) => at < lane.length);
     lane.idx = -1;
-    if (!(id in WORKLET_LANES)) return;
-    const octaves = (l) => l.points.some(([, , p]) => p === -3);
-    if (id === 'notes') {
-      // Notes still held at the end stop with the cycle.
-      const held = new Set();
-      for (const [, key, p, target] of lane.points) {
-        if (p > 0) held.add(key);
-        else if (p === 0) held.delete(key);
-        else if (p === -2 && held.delete(key)) held.add(target);
-      }
-      for (const key of held) lane.points.push([lane.length - 1, key, 0]);
-    } else {
-      // An octave take takes the octave changes out of the note cycle.
-      const notes = this.loop.lanes.get('notes');
-      if (notes?.length && octaves(notes)) {
-        notes.points = notes.points.filter(([, , p]) => p !== -3);
-        this.sendLoop('notes', notes);
-      }
+    if (!(id in WORKLET_LANES) || id === 'notes') return; // notes: the worklet closes the take
+    // An octave take takes the octave changes out of an older note cycle.
+    const notes = this.loop.lanes.get('notes');
+    if (notes?.length && notes.points.some(([, , p]) => p === -3)) {
+      notes.points = notes.points.filter(([, , p]) => p !== -3);
+      this.sendLoop('notes', notes, false, undefined, true);
     }
     // From the position at the closing press (the top): read a moment later,
     // the first event, at 0, counted as already played until the next round.
     this.sendLoop(id, lane, false, (end - lane.origin) % lane.length);
   }
 
-  // Web: notes played while rec is armed make one cycle of their own (id
-  // 'notes'), from the first note to the closing press; a new take over a
-  // closed cycle overdubs it (loopOverdub). Bends (pressure -1, target, pos)
-  // and slides (-2, target) go in it too. A note keeps the octave and
-  // transpose fader it was played with ([ms, key, pressure, octave, fader]),
-  // so octave changes in a take with notes move the notes, not the panel
-  // (the user's choice, 4 November); octave changes before the first note
-  // of the take open the cycle there. The worklet plays it (Controller.setNoteLoop).
-  loopRecordNote(key, pressure, target, pos) {
+  // Web: the note cycle (id 'notes') is recorded in the worklet like an
+  // audio looper (Controller.noteRecArm, the user's choice, 4 November):
+  // what sounds while rec is armed, the arpeggio's steps included, with
+  // octave, transpose and arpeggio accumulator, from the first note to the
+  // closing press; over a closed cycle a new take overdubs it. The panel
+  // keeps a copy of the points (status.rec) to draw and save them; pads
+  // here only count as a movement for the double tap.
+  loopRecordNote() {
+    if (this.loop.armed) this.loop.movedSinceTap = true;
+  }
+
+  // Events of the worklet's note recorder: a take opened, an overdub, points
+  // added by the overdub, the take closed (its points and length, and where
+  // the cycle was when read).
+  loopRecEvents(events) {
     const L = this.loop, t = now();
-    if (!L.armed || L.completed.has('notes')) return;
-    let lane = L.lanes.get('notes');
-    if (lane?.length) { this.loopOverdub(lane, key, pressure, target, pos, t); return; }
-    L.overdub = null;
-    if (!lane && !(pressure > 0)) return; // a release or bend before the first note
-    L.movedSinceTap = true;
-    if (!lane) {
-      const octave = L.lanes.get('octave'), open = octave && !octave.length;
-      if (!open && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); L.completed.add('notes'); return; }
-      if (open) {
-        L.lanes.delete('octave');
-        lane = { origin: octave.origin, length: 0, points: [], idx: -1, rate: 1, notes: true, octave: octave.from };
-      } else lane = { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true, octave: this.pr.octaveIndex };
-      L.lanes.set('notes', lane);
-    }
-    if (t - lane.origin >= this.loopMaxMs()) { this.loopFinish(lane, t, 'notes'); L.completed.add('notes'); return; }
-    lane.points.push(this.notePoint(t - lane.origin, key, pressure, target, pos));
-  }
-
-  notePoint(at, key, pressure, target, pos) {
-    if (pressure < 0) return [at, key, pressure, target, pos ?? 0];
-    return pressure > 0 ? [at, key, pressure, this.pr.octaveIndex, this.pr.articulationDegreeTranspose] : [at, key, 0];
-  }
-
-  // Overdub (web, the user's choice): over a closed note cycle the notes of
-  // a new take go into it at its play position and play from the next round;
-  // the cycle keeps its length and nothing is erased. Only the notes pressed
-  // in this take count: their releases, bends and slides; a note still held
-  // at the closing press stops there (loopOverdubEnd).
-  loopOverdub(lane, key, pressure, target, pos, t) {
-    const L = this.loop;
-    if (!L.overdub) {
-      if (!(pressure > 0)) return;
-      L.overdub = { held: new Set() };
-      this.display.show('overdub', 900);
+    for (const e of events) {
+      let lane = L.lanes.get('notes');
       // A take with notes makes no octave cycle (the notes keep the octave).
-      const octave = L.lanes.get('octave');
-      if (octave && !octave.length) L.lanes.delete('octave');
+      const dropOctave = () => { const o = L.lanes.get('octave'); if (o && !o.length) L.lanes.delete('octave'); };
+      if (e.kind === 'start') {
+        dropOctave();
+        if (!lane && L.lanes.size >= LOOP_LANES) { this.display.show('loop full', 900); this.call('noteRecCancel'); continue; }
+        L.lanes.set('notes', { origin: t, length: 0, points: [], idx: -1, rate: 1, notes: true });
+        L.movedSinceTap = true;
+      } else if (e.kind === 'overdub') {
+        dropOctave();
+        L.overdub = true; L.movedSinceTap = true;
+        this.display.show('overdub', 900);
+      } else if (e.kind === 'add' && lane?.length) {
+        this.loopInsert(lane, e.points);
+      } else if (e.kind === 'take') {
+        if (!lane) L.lanes.set('notes', lane = { notes: true });
+        Object.assign(lane, { points: e.points, length: e.length, origin: t - e.pos, idx: -1, rate: 1 });
+      }
     }
-    const held = L.overdub.held;
-    if (pressure > 0) held.add(key);
-    else if (!held.has(key)) return;
-    else if (pressure === 0) held.delete(key);
-    else if (pressure === -2) { held.delete(key); held.add(target); }
-    L.movedSinceTap = true;
-    this.loopInsert(lane, [this.notePoint(this.lanePos(lane, t), key, pressure, target, pos)]);
   }
 
-  loopOverdubEnd(t) {
-    const L = this.loop, lane = L.lanes.get('notes'), held = L.overdub?.held;
-    L.overdub = null;
-    if (!lane?.length || !held?.size) return;
-    const at = this.lanePos(lane, t);
-    this.loopInsert(lane, [...held].map((key) => [at, key, 0]));
-  }
-
-  // Points into a closed note cycle, in time order, and to the worklet.
+  // Points into the copy of a closed note cycle, in time order.
   loopInsert(lane, points) {
     for (const p of points) {
       let i = lane.points.length;
       while (i > 0 && lane.points[i - 1][0] > p[0]) i--;
       lane.points.splice(i, 0, p);
     }
-    this.call('addNoteLoopPoints', points);
   }
 
   // Octave changes while rec is armed: in a take with notes (recorded or
-  // overdubbed) only the notes keep them; otherwise a cycle of their own (id
+  // overdubbed) the worklet keeps them on the notes, not the panel;
+  // otherwise a cycle of their own (id
   // 'octave'), from the first change to the closing press, played by the
   // worklet like the notes (so it also plays alone, with nothing played) and
   // moving the panel's octave. A new octave take replaces it; out of a take
@@ -1060,10 +1025,10 @@ export class Ui {
   }
 
   // A worklet cycle (notes, octave) to the worklet: where it is now, or on
-  // the beat (align).
-  sendLoop(id, lane, align = false, phase) {
+  // the beat (align); keep: the same cycle retimed, its sounding notes go on.
+  sendLoop(id, lane, align = false, phase, keep = false) {
     const loop = lane?.length ? { points: lane.points, length: lane.length, rate: lane.rate || 1, phase: phase ?? this.lanePos(lane, now()) } : null;
-    this.call(WORKLET_LANES[id], loop, align);
+    this.call(WORKLET_LANES[id], loop, align, keep);
   }
 
   loopRecord(id, v) {
@@ -1113,7 +1078,8 @@ export class Ui {
 
   loopLoad(clip) {
     const L = this.loop, t = now();
-    L.armed = false; L.completed.clear(); L.lanes = new Map(); L.overdub = null;
+    L.armed = false; L.completed.clear(); L.lanes = new Map(); L.overdub = false;
+    this.call('noteRecCancel');
     for (const [id, lane] of clip?.lanes || []) {
       // Version 1 clips: one shared length, each lane a plain point list.
       const c = Array.isArray(lane) ? { length: clip.length, phase: 0, points: lane } : lane;
@@ -1172,20 +1138,25 @@ export class Ui {
     e.quant = { bars: best, now: bars };
   }
 
-  // Stretch the cycle to the chosen bars and start it from the top on the
-  // next beat (until then it plays on from the end of the new cycle).
+  // Stretch the cycle to the chosen bars. It goes on from where it is (the
+  // same point of the cycle, stretched), moved by less than half a beat so
+  // that its top falls on a beat (the user's choice, 4 November: it used to
+  // start again from the top on the next beat); sounding notes go on.
   applyQuantize() {
     const e = this.loopEdit, id = this.loopEditIds()[e.sel], lane = this.loop.lanes.get(id);
     if (!lane?.length || !e.quant) return;
     const rate = lane.rate || 1, length = LOOP_BARS[e.quant.bars] * 4 * this.beatMs() * rate;
-    const k = length / lane.length;
+    const k = length / lane.length, t = now();
+    const stretched = this.lanePos(lane, t) * k;
     lane.points = lane.points.map(([at, ...rest]) => [at * k, ...rest]);
     lane.length = length;
     lane.idx = -1;
-    const beat = this.beatMs(), t = now();
-    const into = ((this.state?.status.clockPhase ?? 0) / 256) * beat;
-    lane.origin = t + (into ? beat - into : 0);
-    if (id in WORKLET_LANES) this.sendLoop(id, lane, true);
+    // In recorded time a beat is beat * rate; the last beat was "into" ago.
+    const beat = this.beatMs(), into = ((this.state?.status.clockPhase ?? 0) / 256) * beat;
+    const grid = beat * rate, lead = into * rate;
+    const pos = ((Math.round((stretched - lead) / grid) * grid + lead) % length + length) % length;
+    lane.origin = t - pos / rate;
+    if (id in WORKLET_LANES) this.sendLoop(id, lane, false, pos, true);
     this.display.show(`${this.loopName(id)} ${LOOP_BARS[e.quant.bars]} bar`, 900);
     e.quant = null;
   }
@@ -1198,7 +1169,7 @@ export class Ui {
     const i = clamp(LOOP_RATES.indexOf(lane.rate || 1) + step, 0, LOOP_RATES.length - 1);
     lane.rate = LOOP_RATES[i];
     lane.origin = t - pos / lane.rate; // the position goes on from where it is
-    if (id in WORKLET_LANES) this.sendLoop(id, lane);
+    if (id in WORKLET_LANES) this.sendLoop(id, lane, false, undefined, true);
   }
 
   loopName(id) {
@@ -1336,6 +1307,7 @@ export class Ui {
     this.pr.latchedNote = data.pr.latchedNote;
     this.pr.trilloOn = data.pr.trilloOn;
     this.bpm = data.status.bpm;
+    if (data.rec) this.loopRecEvents(data.rec);
   }
 
   // Lights and screen at about 30 fps (the status arrives at 30 Hz); a 60 or
@@ -1570,6 +1542,7 @@ export class Ui {
     return P.drawListPage(ctx, `pad ${key + 1}`, m, [
       ['play', `${rule.play[0]}:${rule.play[1]}`, s(0)], ['acc', `${rule.acc > 0 ? '+' : ''}${rule.acc}`, s(1)],
       ['limit', `${rule.limit}`, s(2)], ['mode', rule.mode, s(3)],
+      ['vel', rule.vel ? `${rule.vel}%` : 'played', s(4)],
     ], 'arp', () => this.openPage('analyser'));
   }
 

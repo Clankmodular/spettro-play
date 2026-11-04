@@ -160,7 +160,8 @@ class SpectrumProcessor extends AudioWorkletProcessor {
       this.port.postMessage({ type: 'status', status: this.controller.status(), reply: this.reply.slice(),
         pr: { latchedNote: pr.latchedNote, trilloOn: pr.trilloOn, spectralMode: pr.spectralMode, oscBank: pr.oscBank },
         geometry: this.geometry(), bandLevels: Array.from(lights.subarray(0, 8)),
-        taps: Array.from(lights.subarray(8, 16)), delayHits: this.hits, load: this.load.last });
+        taps: Array.from(lights.subarray(8, 16)), delayHits: this.hits, load: this.load.last,
+        rec: this.controller.recDrain() });
       this.hits = 0;
     }
     // Hits are collected every block so short flashes are not missed.

@@ -194,9 +194,13 @@ export class Controller {
     this.keyDown = new Uint8Array(KEYS);
     this.keyStack = [];
     this.keyboardFreq = new Float32Array(KEYS);
-    // Web: octave and transpose fader of the keys last played by the note
-    // cycle, { octave, degree } (see refreshVoices); a key played live loses it.
-    this.keyPin = new Map();
+    // Web: the note recorder of the looper (see noteRecArm): armed, the open
+    // take or overdub, the live voices being recorded (index -> { key,
+    // octave, fader }) and the events for the panel (recDrain).
+    this.rec = { armed: false, maxMs: 0, take: null, overdub: null, voices: new Map(), events: [] };
+    // Keys held at the closing press of a note take: the cycle plays them
+    // from then on and their release by hand is ignored (noteLoopTakeover).
+    this.loopTaken = new Set();
     this.updateKeyboard();
 
     // Voices, as the polyV* arrays of the firmware.
@@ -225,14 +229,14 @@ export class Controller {
     this.arpRulesReset();
     this.arpKey = 255;
     this.arpNext = null;
-    this.arpGateOff = 0;
+    this.arpGate = null; this.arpPeriod = 0;
     this.arpStep = 0;
 
     // Held MIDI notes (midiHeldNotes): note -> { channel, pressure, order,
     // keyDown, retouchAt }, and the MIDI arpeggio that sequences them.
     this.midiHeld = new Map();
     this.midiOrder = 1;
-    this.midiArp = { active: false, sequence: new Sequence(0x5bd1e995), next: null, step: 0, gateOff: 0, playing: false };
+    this.midiArp = { active: false, sequence: new Sequence(0x5bd1e995), next: null, step: 0, gate: null, period: 0, playing: false };
   }
 
   // ---- Pitch ------------------------------------------------------------
@@ -330,11 +334,11 @@ export class Controller {
   allocKeyboardVoice(key) {
     for (let i = 0; i < VOICES; i++) {
       const v = this.v[i];
-      if (v.owner === OWNER_KEYBOARD && v.gate && v.key === key) return i;
+      if (v.owner === OWNER_KEYBOARD && !v.looped && v.gate && v.key === key) return i;
     }
     for (let i = 0; i < VOICES; i++) {
       const v = this.v[i];
-      if (v.owner === OWNER_KEYBOARD && !v.gate && v.key === key && this.adsr[i] > ENV_ACTIVE) return i;
+      if (v.owner === OWNER_KEYBOARD && !v.looped && !v.gate && v.key === key && this.adsr[i] > ENV_ACTIVE) return i;
     }
     return this.noteLoopPlaying ? this.claimLoopAwareVoice(!!this.noteLooping) : this.claimVoice(OWNER_KEYBOARD);
   }
@@ -375,7 +379,7 @@ export class Controller {
   keyOn(key, pressure) {
     if (key < 0 || key >= KEYS) return;
     pressure = clamp(Math.round(pressure), 1, 255);
-    if (!this.noteLooping) this.keyPin.delete(key);
+    if (!this.noteLooping) this.loopTaken.delete(key);
     if (this.pr.latchedNote && this.keyStack.includes(key) && !this.keyDown[key]) {
       // Latched retouch: a short tap removes the key on release.
       this.keyDown[key] = 1;
@@ -398,10 +402,11 @@ export class Controller {
   keyPressure(key, pressure) {
     if (key < 0 || key >= KEYS || !this.keyDown[key]) return;
     this.keyAftertouch[key] = clamp(Math.round(pressure), 1, 255);
-    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && v.key === key && v.gate) v.aft = this.keyAftertouch[key];
+    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && !v.looped && v.key === key && v.gate) v.aft = this.keyAftertouch[key];
   }
 
   keyOff(key) {
+    if (!this.noteLooping && this.loopTaken.delete(key)) return; // the note cycle plays it now
     if (key < 0 || key >= KEYS || !this.keyDown[key]) return;
     this.keyDown[key] = 0;
     if (this.pr.latchedNote) {
@@ -427,8 +432,9 @@ export class Controller {
   keyBend(key, target, pos) {
     if (key < 0 || key >= KEYS || target < 0 || target >= KEYS || this.pr.trilloOn) return;
     pos = clamp(pos, 0, 1);
+    this.recBend(key, target, pos);
     this.v.forEach((v, i) => {
-      if (v.owner !== OWNER_KEYBOARD || v.key !== key || !v.gate) return;
+      if (v.owner !== OWNER_KEYBOARD || v.looped || v.key !== key || !v.gate) return;
       v.bendTo = pos > 0 ? target : 255;
       v.bendPos = pos;
       this.renderVoice(i);
@@ -438,6 +444,7 @@ export class Controller {
   keySlide(key, target) {
     if (key < 0 || key >= KEYS || target < 0 || target >= KEYS || this.pr.trilloOn) return;
     if (!this.keyDown[key] || this.keyDown[target]) return;
+    this.recSlide(key, target);
     this.keyDown[key] = 0;
     this.keyDown[target] = 1;
     this.keyAftertouch[target] = this.keyAftertouch[key];
@@ -445,7 +452,7 @@ export class Controller {
     if (this.momentaryHold.delete(key)) this.momentaryHold.add(target);
     if (this.retouchAt?.has(key)) { this.retouchAt.set(target, this.retouchAt.get(key)); this.retouchAt.delete(key); }
     this.v.forEach((v, i) => {
-      if (v.owner !== OWNER_KEYBOARD || v.key !== key || !v.gate) return;
+      if (v.owner !== OWNER_KEYBOARD || v.looped || v.key !== key || !v.gate) return;
       v.key = target;
       if (v.holdKey === key) v.holdKey = target;
       v.bendTo = 255; v.bendPos = 0;
@@ -458,7 +465,7 @@ export class Controller {
     this.keyStack = this.keyStack.filter((k) => k !== key);
     // The arpeggio finishes its current step; it only loses the key.
     if (this.pr.trilloOn && key === this.arpKey) return;
-    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && v.key === key) v.gate = false;
+    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && !v.looped && v.key === key) v.gate = false;
   }
 
   // ---- Arpeggio (updateTrillo, KTE:64-416) ----------------------------------
@@ -472,7 +479,7 @@ export class Controller {
     this.arpRulesReset();
     if (on) {
       // Held notes stop sounding directly and become the arpeggio.
-      for (const v of this.v) if (v.owner === OWNER_KEYBOARD) v.gate = false;
+      for (const v of this.v) if (v.owner === OWNER_KEYBOARD && !v.looped) v.gate = false;
       this.arpNext = this.keyStack.length ? this.timeMs : null;
       return;
     }
@@ -490,17 +497,28 @@ export class Controller {
 
   stopArpNote() {
     if (this.arpKey >= KEYS) return;
-    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && v.key === this.arpKey) v.gate = false;
+    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && !v.looped && v.key === this.arpKey) v.gate = false;
     this.arpKey = 255;
+  }
+
+  // End of the sounding arpeggio note: its share of the interval to the next
+  // onset (gate.steps, in steps) at the step length and hold of now, so a
+  // change of tempo or hold acts on it at once, also with the arpeggio latched.
+  arpGateEnd(gate, period) {
+    return gate ? gate.from + Math.max(1, gate.steps * period * clamp(this.pr.trilloHoldPercent, 1, 100) / 100) : 0;
   }
 
   arpeggio() {
     if (!this.pr.trilloOn) return;
-    if (this.arpKey < KEYS && this.timeMs >= this.arpGateOff) this.stopArpNote();
-    if (!this.keyStack.length || this.arpPaused) { this.arpNext = null; this.sequence.reset(); this.arpStep = 0; this.arpRulesReset(); return; }
     const pr = this.pr;
     const speed = clamp(pr.trilloSpeed + this.cc(DEST.Trillo), 0, 255);
     const period = this.clockTimeMs / stepsPerBeat(speed);
+    // Web (asked by the user): a new tempo moves the next step at once (last
+    // step + the new step length) instead of after the old one.
+    if (this.arpNext !== null && this.arpPeriod && period !== this.arpPeriod) this.arpNext += period - this.arpPeriod;
+    this.arpPeriod = period;
+    if (this.arpKey < KEYS && this.timeMs >= this.arpGateEnd(this.arpGate, period)) this.stopArpNote();
+    if (!this.keyStack.length || this.arpPaused) { this.arpNext = null; this.sequence.reset(); this.arpStep = 0; this.arpRulesReset(); return; }
     if (this.arpNext === null) this.arpNext = this.timeMs;
     if (this.timeMs - this.arpNext > 2 * period) this.arpNext = this.timeMs;
     const { steps, hits, human } = this.arpRhythm();
@@ -515,12 +533,15 @@ export class Controller {
     // A pad with a rule plays only on its cycles (x of every y) and moves by
     // its accumulator each time it plays.
     if (key < KEYS && (!rule || this.arpRulePlays(rule))) {
-      const pressure = human ? humanPressure(human, this.arpStep, this.keyAftertouch[key]) : undefined;
+      // A pad's own velocity (rule.vel, %) in place of the played pressure;
+      // the humanize works on either.
+      const vel = rule?.vel ? clamp(Math.round(rule.vel * 2.55), 1, 255) : 0;
+      const base = vel || this.keyAftertouch[key];
+      const pressure = human ? humanPressure(human, this.arpStep, base) : vel || undefined;
       this.noteOnKey(key, true, pressure, rule ? this.arpAccumulate(key, rule) : 0);
       this.arpKey = key;
       // Gate length uses the interval to the next (humanized) onset.
-      const nextDelay = humanDelay(human, this.arpStep + 1, period);
-      this.arpGateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
+      this.arpGate = { from: this.timeMs, steps: (period + humanDelay(human, this.arpStep + 1, period) - delay) / period };
     }
     // A cycle: the pattern back at its first step (every step for one key).
     if (this.sequence.position === 0 || this.keyStack.length === 1) this.arpCycle++;
@@ -566,7 +587,7 @@ export class Controller {
   }
 
   restartKeyBands(key) {
-    this.v.forEach((v, i) => { if (v.owner === OWNER_KEYBOARD && v.key === key && v.gate) this.restartBits ^= 1 << i; });
+    this.v.forEach((v, i) => { if (v.owner === OWNER_KEYBOARD && !v.looped && v.key === key && v.gate) this.restartBits ^= 1 << i; });
   }
 
   noteOnKey(key, trigger, pressure, acc = 0) {
@@ -575,7 +596,7 @@ export class Controller {
     const v = this.v[i];
     const fresh = !v.gate || v.key !== key;
     if (fresh || this.pr.trilloOn || this.pr.latchedNote) {
-      v.pin = this.keyPin.get(key) || null;
+      v.pin = null;
       v.transpose = this.pr.scaleRoot;
       v.degree = this.currentDegreeTranspose(v.pin?.degree);
       v.octave = v.pin ? v.pin.octave : this.currentOctaveIndex();
@@ -589,6 +610,7 @@ export class Controller {
     if (trigger) v.trig = true;
     this.lastVoice = i;
     this.renderVoice(i);
+    if (trigger && this.recording()) this.recNoteOn(i);
   }
 
   // ---- Hold (❄): tap latches, hold >= 300 ms captures momentarily -------
@@ -597,7 +619,7 @@ export class Controller {
     this.holdPressedAt = this.timeMs;
     this.holdCaptured = false;
     for (let k = 0; k < KEYS; k++) if (this.keyDown[k]) this.momentaryHold.add(k);
-    this.v.forEach((v) => { if (v.owner === OWNER_KEYBOARD && v.gate && this.momentaryHold.has(v.key)) v.holdKey = v.key; });
+    this.v.forEach((v) => { if (v.owner === OWNER_KEYBOARD && !v.looped && v.gate && this.momentaryHold.has(v.key)) v.holdKey = v.key; });
     // Web-only (the firmware captures keyboard keys only): MIDI notes held
     // at the press are captured too, until Hold is released.
     for (const h of this.midiHeld.values()) if (h.keyDown) h.captured = true;
@@ -770,9 +792,12 @@ export class Controller {
       a.sequence.reset();
       this.midiSilence();
     }
-    if (a.playing && this.timeMs >= a.gateOff) { this.midiSilence(); a.playing = false; }
     const speed = clamp(pr.trilloSpeed + this.cc(DEST.Trillo), 0, 255);
     const period = this.clockTimeMs / stepsPerBeat(speed);
+    // Tempo and hold at once (see arpeggio).
+    if (a.period && period !== a.period) a.next += period - a.period;
+    a.period = period;
+    if (a.playing && this.timeMs >= this.arpGateEnd(a.gate, period)) { this.midiSilence(); a.playing = false; }
     if (this.timeMs - a.next > 2 * period) a.next = this.timeMs;
     const { steps, hits, human } = this.arpRhythm();
     const delay = humanDelay(human, a.step, period);
@@ -789,8 +814,7 @@ export class Controller {
       this.midiSilence();
       this.midiVoiceOn(note, h.channel, human ? humanPressure(human, a.step, h.pressure) : h.pressure);
       a.playing = true;
-      const nextDelay = humanDelay(human, a.step + 1, period);
-      a.gateOff = this.timeMs + Math.max(1, (period + nextDelay - delay) * clamp(pr.trilloHoldPercent, 1, 100) / 100);
+      a.gate = { from: this.timeMs, steps: (period + humanDelay(human, a.step + 1, period) - delay) / period };
     }
     a.step++;
     a.next += period;
@@ -816,30 +840,39 @@ export class Controller {
   alignBeat() { this.clockStart = this.timeMs; }
 
   // ---- Web: the note cycle of the motion loop ------------------------------
-  // Recorded on the panel while rec is armed (points [ms, key, pressure,
-  // octave, fader], pressure 0 = off; [ms, key, -1, target, pos] a bend, [ms, key, -2,
-  // target] a slide to the next pad, [ms, 0, -3, octave] an octave change), played here on the 5 ms tick through the keyboard
-  // path, so Hold and the arpeggio work on it. A note keeps the octave and
-  // transpose fader of its take (keyPin; older cycles without them follow
-  // the panel). phase: where it is now, in
-  // recorded time; align: start from the top on the next beat (quantize).
-  // The octave cycle (octave changes recorded without notes) is played the
-  // same way, before the notes on each tick.
+  // Recorded here, like an audio looper (the user's choice, 4 November): what
+  // the keyboard voices play while rec is armed, the arpeggio's steps
+  // included, not the pads pressed. Points: [ms, key, pressure, octave, fader,
+  // acc] a note (octave, transpose fader and arpeggio accumulator as it
+  // sounded), [ms, key, 0] its end, [ms, key, -1, target, pos] a bend,
+  // [ms, key, -2, target] a slide to the next pad, [ms, key, -4, octave,
+  // fader] an octave or transpose change on a sounding note. The cycle plays
+  // them on voices of its own (v.looped), outside the arpeggio, Hold and the
+  // pads, so turning the arpeggio off or changing octave or transpose leaves
+  // it as it was; they follow only the root, the scale and the LFO on
+  // transpose. Older cycles (pads recorded on the panel: notes without the
+  // octave, [ms, 0, -3, octave] octave changes) still play through the
+  // keyboard path. The panel mirrors the points (recDrain) to draw and save
+  // them. phase: where it is now, in recorded time; align: start from the
+  // top on the next beat. The octave cycle (octave changes recorded without
+  // notes) is played the same way, before the notes on each tick.
 
-  setNoteLoop(loop, align = false) {
+  // keep: the same cycle retimed (quantize, speed): the notes it holds go on.
+  setNoteLoop(loop, align = false, keep = false) {
+    const old = this.noteLoop;
+    if (keep && old && loop) {
+      this.noteLoop = Object.assign(this.eventLoop(loop, align), { on: old.on, direct: old.direct, latched: old.latched });
+      this.noteLoop.pinned = old.pinned;
+      this.noteLoopPlaying = true;
+      return;
+    }
     this.noteLoopRelease();
-    this.keyPin.clear();
     this.noteLoop = this.eventLoop(loop, align);
     this.noteLoopPlaying = !!this.noteLoop;
-    // Notes with their own octave: the cycle's octave changes (older cycles)
-    // do not move the panel.
-    if (this.noteLoop) this.noteLoop.pinned = this.noteLoop.points.some(([, , p, o]) => p > 0 && o !== undefined);
-  }
-
-  // Overdub: points played over the running cycle join it at the next round
-  // (the top), so a note just played live is not played again at once.
-  addNoteLoopPoints(points) {
-    if (this.noteLoop) this.noteLoop.pending.push(...points);
+    if (!this.noteLoop) { this.rec.overdub = null; return; }
+    // Older cycles with octave changes and notes with their octave (the
+    // first takes of 4 November): the changes do not move the panel.
+    this.noteLoop.pinned = this.noteLoop.points.some(([, , p, o]) => p > 0 && o !== undefined);
   }
 
   setOctaveLoop(loop, align = false) { this.octaveLoop = this.eventLoop(loop, align); }
@@ -852,19 +885,218 @@ export class Controller {
     // last: the position already played; events after it and up to the
     // position of each tick fire (from the top: the one at 0 too).
     const last = align ? -1 : (((loop.phase || 0) - 1e-6) % len + len) % len;
-    return { points: loop.points, length: len, rate, origin, last, on: new Set(), pending: [] };
+    return { points: loop.points.slice(), length: len, rate, origin, last,
+      on: new Set(), direct: new Set(), latched: new Set(), pending: [] };
   }
 
   noteLoopRelease() {
-    if (!this.noteLoop) return;
-    for (const k of this.noteLoop.on) this.keyOff(k);
-    this.noteLoop.on.clear();
+    const n = this.noteLoop;
+    if (!n) return;
+    for (const k of n.direct) this.loopVoiceOff(k);
+    for (const k of n.on) this.keyOff(k);
+    n.direct.clear(); n.on.clear();
   }
 
-  // An octave change of a cycle: the panel follows it (octaveSeq).
+  // ---- Recording (rec armed on the panel) --------------------------------
+  // The first note played opens the take, or, over a closed cycle, an
+  // overdub: its points join the cycle at its play position and sound from
+  // the next round. The closing press ends it (noteRecClose); a take also
+  // ends at maxMs.
+
+  noteRecArm(maxMs) { this.rec.armed = true; this.rec.maxMs = maxMs || 64 * this.clockTimeMs; }
+
+  noteRecCancel() { this.rec.armed = false; this.rec.take = null; this.rec.overdub = null; this.rec.voices.clear(); }
+
+  noteRecClose() {
+    const r = this.rec;
+    r.armed = false;
+    if (r.take) {
+      const take = r.take, length = clamp(this.timeMs - take.origin, 1, r.maxMs);
+      r.take = null;
+      // Notes still sounding stop with the cycle.
+      for (const e of r.voices.values()) take.points.push([length - 1, e.key, 0]);
+      r.voices.clear();
+      const points = take.points.filter(([at]) => at < length);
+      // What is held by hand (or latched) was the take: the cycle plays it
+      // now from the top, so it stops and its release by hand is ignored.
+      this.noteLoopTakeover();
+      this.setNoteLoop({ points, length, rate: 1, phase: 0 });
+      r.events.push({ kind: 'take', points, length });
+    } else if (r.overdub) {
+      const at = this.loopPos();
+      this.recPush([...r.voices.values()].map((e) => [at, e.key, 0]));
+      r.voices.clear();
+      r.overdub = null;
+    }
+  }
+
+  // The panel's mirror of the take (status.rec), with the cycle's position
+  // when it was read.
+  recDrain() {
+    const r = this.rec;
+    if (!r.events.length) return undefined;
+    const events = r.events.map((e) => (e.kind === 'take' ? { ...e, pos: this.loopPos() } : e));
+    r.events = [];
+    return events;
+  }
+
+  loopPos() {
+    const n = this.noteLoop;
+    return n ? Math.max(0, ((this.timeMs - n.origin) * n.rate) % n.length) : 0;
+  }
+
+  recording() { return this.rec.armed && !this.noteLooping; }
+
+  recTime() { return this.rec.take ? this.timeMs - this.rec.take.origin : this.loopPos(); }
+
+  recPush(points) {
+    const r = this.rec;
+    if (r.take) { r.take.points.push(...points); return; }
+    if (!this.noteLoop) return;
+    this.noteLoop.pending.push(...points);
+    r.events.push({ kind: 'add', points });
+  }
+
+  // A live keyboard voice starts a note (noteOnKey).
+  recNoteOn(i) {
+    const r = this.rec, v = this.v[i];
+    if (!r.take && !r.overdub) {
+      if (this.noteLoop) { r.overdub = true; r.events.push({ kind: 'overdub' }); }
+      else { r.take = { origin: this.timeMs, points: [] }; r.events.push({ kind: 'start' }); }
+    }
+    const t = this.recTime(), old = r.voices.get(i);
+    if (old && old.key !== v.key) this.recPush([[t, old.key, 0]]);
+    const fader = this.pr.articulationDegreeTranspose;
+    r.voices.set(i, { key: v.key, octave: v.octave, fader });
+    this.recPush([[t, v.key, v.aft, v.octave, fader, v.acc || 0]]);
+  }
+
+  // Each tick: ends of the recorded notes, and octave or transpose changes
+  // on them (live voices follow the panel, see refreshVoices).
+  recScan() {
+    const r = this.rec;
+    if (r.take && this.timeMs - r.take.origin >= r.maxMs) { this.noteRecClose(); return; }
+    if (!r.voices.size) return;
+    const t = this.recTime(), out = [];
+    for (const [i, e] of r.voices) {
+      const v = this.v[i];
+      if (!v.gate || v.looped || v.owner !== OWNER_KEYBOARD || v.key !== e.key) { out.push([t, e.key, 0]); r.voices.delete(i); continue; }
+      const fader = v.holdKey < KEYS ? e.fader : this.pr.articulationDegreeTranspose;
+      if (v.octave !== e.octave || fader !== e.fader) {
+        e.octave = v.octave; e.fader = fader;
+        out.push([t, e.key, -4, v.octave, fader]);
+      }
+    }
+    if (out.length) this.recPush(out);
+  }
+
+  // A live bend or slide of recorded notes (keyBend, keySlide).
+  recBend(key, target, pos) {
+    if (!this.recording()) return;
+    for (const e of this.rec.voices.values()) if (e.key === key) { this.recPush([[this.recTime(), key, -1, target, pos]]); return; }
+  }
+
+  recSlide(key, target) {
+    if (!this.recording()) return;
+    for (const e of this.rec.voices.values()) {
+      if (e.key !== key) continue;
+      this.recPush([[this.recTime(), key, -2, target]]);
+      e.key = target;
+      return;
+    }
+  }
+
+  // A take closes and its cycle starts from the top: what is held by hand
+  // (or latched by Hold) is the take, now played by the cycle, so it stops
+  // here, its release by hand is ignored and the arpeggio starts again.
+  // Without this the first round played over the held keys.
+  noteLoopTakeover() {
+    for (let k = 0; k < KEYS; k++) if (this.keyDown[k] && !this.momentaryHold.has(k)) this.loopTaken.add(k);
+    for (const k of this.loopTaken) this.keyDown[k] = 0;
+    this.keyStack = this.keyStack.filter((k) => this.momentaryHold.has(k));
+    this.retouchAt?.clear();
+    for (const v of this.v) if (v.owner === OWNER_KEYBOARD && !v.looped && v.holdKey >= KEYS) v.gate = false;
+    this.arpRestart();
+  }
+
+  arpRestart() {
+    this.stopArpNote();
+    this.arpNext = null; this.arpPaused = false; this.arpStep = 0;
+    this.sequence.reset();
+    this.arpRulesReset();
+  }
+
+  // ---- Playback --------------------------------------------------------
+
+  // A note of the cycle on a voice of its own (one per key of the cycle).
+  loopVoiceOn(key, pressure, octave, fader, acc) {
+    let i = this.v.findIndex((v) => v.owner === OWNER_KEYBOARD && v.looped && v.gate && v.key === key);
+    if (i < 0) i = this.claimLoopAwareVoice(true);
+    if (i < 0) return;
+    const v = this.v[i];
+    v.owner = OWNER_KEYBOARD; v.holdKey = 255; v.midiNote = -1;
+    v.key = key; v.looped = true;
+    v.pin = { octave: clamp(octave, 0, 6), degree: fader ?? 0 };
+    v.transpose = this.pr.scaleRoot;
+    v.degree = this.currentDegreeTranspose(v.pin.degree);
+    v.octave = v.pin.octave;
+    v.bendTo = 255; v.bendPos = 0;
+    v.aft = clamp(Math.round(pressure), 1, 255);
+    v.acc = acc || 0;
+    v.gate = true; v.trig = true;
+    this.lastVoice = i;
+    this.renderVoice(i);
+  }
+
+  loopVoices(key, fn) {
+    this.v.forEach((v, i) => { if (v.owner === OWNER_KEYBOARD && v.looped && v.gate && v.key === key) fn(v, i); });
+  }
+
+  loopVoiceOff(key) { this.loopVoices(key, (v) => { v.gate = false; }); }
+
+  // An octave or transpose change recorded on a sounding note: its voice
+  // moves there, as it did in the take; the panel stays.
+  loopRetune(key, octave, fader) {
+    this.loopVoices(key, (v, i) => {
+      v.pin = { octave: clamp(octave, 0, 6), degree: fader ?? v.pin?.degree ?? 0 };
+      v.octave = v.pin.octave;
+      v.degree = this.currentDegreeTranspose(v.pin.degree);
+      this.renderVoice(i);
+    });
+  }
+
+  loopVoiceBend(key, target, pos) {
+    if (target < 0 || target >= KEYS) return;
+    this.loopVoices(key, (v, i) => {
+      v.bendPos = clamp(pos, 0, 1);
+      v.bendTo = v.bendPos > 0 ? target : 255;
+      this.renderVoice(i);
+    });
+  }
+
+  loopVoiceSlide(key, target) {
+    if (target < 0 || target >= KEYS) return;
+    this.loopVoices(key, (v, i) => {
+      v.key = target; v.bendTo = 255; v.bendPos = 0;
+      this.restartBits ^= 1 << i;
+      this.renderVoice(i);
+    });
+  }
+
+  // An octave change of an older cycle: the panel follows it (octaveSeq).
   loopOctave(index) {
     this.pr.octaveIndex = clamp(index, 0, 6);
     this.octaveSeq = (this.octaveSeq || 0) + 1;
+  }
+
+  // Top of an older note cycle (played through the keyboard) with the
+  // arpeggio on: each round starts as the take did. The keys the cycle
+  // latched (Hold) go, and with no key left the arpeggio starts again.
+  noteLoopTop(n) {
+    if (!this.pr.trilloOn || (!n.on.size && !n.latched.size)) return;
+    for (const k of n.latched) if (!n.on.has(k) && !this.keyDown[k]) this.releaseKey(k);
+    n.latched.clear();
+    if (!this.keyStack.length) this.arpRestart();
   }
 
   noteLoopTick() {
@@ -877,20 +1109,24 @@ export class Controller {
     if (this.timeMs < n.origin) return; // waiting for the beat
     const pos = ((this.timeMs - n.origin) * n.rate) % n.length;
     const fire = (from, to) => {
-      for (const [at, key, p, target, bend] of n.points) {
+      for (const [at, key, p, target, bend, acc] of n.points) {
         if (at <= from || at > to) continue;
         this.noteLooping = true;
-        if (p > 0) {
+        if (p > 0 && target !== undefined) { this.loopVoiceOn(key, p, target, bend, acc); n.direct.add(key); }
+        else if (p > 0) { // older cycles: through the keyboard
           if (n.on.has(key)) this.keyOff(key);
-          if (target !== undefined) this.keyPin.set(key, { octave: target, degree: bend });
           this.keyOn(key, p); n.on.add(key);
+          if (this.pr.latchedNote) n.latched.add(key);
         }
-        else if (p === 0) { if (n.on.delete(key)) this.keyOff(key); }
+        else if (p === 0) { if (n.direct.delete(key)) this.loopVoiceOff(key); else if (n.on.delete(key)) this.keyOff(key); }
         else if (p === -3) { if (!n.pinned) this.loopOctave(target); }
+        else if (p === -4) this.loopRetune(key, target, bend);
+        else if (p === -1 && n.direct.has(key)) this.loopVoiceBend(key, target, bend);
+        else if (p === -2 && n.direct.has(key)) {
+          if (!n.direct.has(target)) { this.loopVoiceSlide(key, target); n.direct.delete(key); n.direct.add(target); }
+        }
         else if (n.on.has(key) && p === -1) this.keyBend(key, target, bend);
         else if (n.on.has(key) && p === -2 && !n.on.has(target)) {
-          const pin = this.keyPin.get(key);
-          if (pin) this.keyPin.set(target, pin);
           this.keySlide(key, target);
           n.on.delete(key); n.on.add(target);
         }
@@ -900,6 +1136,7 @@ export class Controller {
     if (pos >= n.last) fire(n.last, pos);
     else {
       fire(n.last, n.length);
+      if (n === this.noteLoop) this.noteLoopTop(n);
       if (n.pending.length) { n.points = [...n.points, ...n.pending]; n.pending = []; }
       fire(-1, pos);
     }
@@ -1052,6 +1289,7 @@ export class Controller {
     this.arpeggio();
     this.midiArpeggio();
     this.refreshVoices();
+    this.recScan();
   }
 
   // Pitch of the most recent note, for the analyser filter overlay.

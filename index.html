@@ -14,7 +14,7 @@
     <header class="bar">
       <div class="brand-row">
         <div class="brand" role="img" aria-label="Clank Spettro"></div>
-        <span class="version" title="Versione della pagina: cambia a ogni pubblicazione">v 68 · 4/11</span>
+        <span class="version" title="Versione della pagina: cambia a ogni pubblicazione">v 69 · 4/11</span>
       </div>
       <div class="tools">
         <button id="guide-open" type="button" aria-haspopup="dialog" title="How to play Spettro">guide</button>
@@ -90,7 +90,8 @@
             With the arpeggio latched by Hold, hold one of its pads: that note's page. <b>play</b> — on which cycles it sounds
             (1:1 every pass of the pattern, 1:2 the first of every two, 2:2 the second…); <b>acc</b> — scale degrees it moves
             each time it plays (− down), <b>limit</b> — how far, <b>mode</b> — <b>clip</b> back to the start past the limit,
-            <b>wrap</b> past +limit on from −limit (it keeps going round), <b>pendulum</b> back and forth. Saved with the preset.
+            <b>wrap</b> past +limit on from −limit (it keeps going round), <b>pendulum</b> back and forth; <b>vel</b> — its own velocity,
+            5 to 100 % (played: as you pressed it; the humanize works on it too). Saved with the preset.
             With the arpeggio on, Hold pauses and restarts it: switched off, the arpeggio stops and keeps its notes (arp LED blinking); Hold on again restarts them, a new note starts a new arpeggio without Hold.</li>
           <li><b>clock</b> — tap it in time to set the tempo; long press: the tempo page. The LED blinks on the beat.</li>
         </ul>
@@ -129,7 +130,7 @@
           <li><b>attack</b> and <b>release</b> of every note.</li>
           <li>The button by them opens the band envelope page: attack and release <b>shapes</b> (which bands open or close first)
             and <b>sustain</b> (which bands stay open while you hold a note; the others pluck). Its LED blinks while the page is open;
-            any other button closes it, except the octave buttons.</li>
+            any other button closes it, except the octave buttons and ❄ (Hold leaves every page open).</li>
         </ul>
       </section>
 
@@ -181,10 +182,11 @@
             LFO turns white and blue in turn).</li>
           <li>A new take re-records only the controls you move. Moving a looping control by hand removes just its cycle.
             Double tap ‹ clears every cycle. Loops are saved with presets, up to 24.</li>
-          <li>Notes you play while ‹ is recording, with their bends, slides and octave changes, make a cycle of their own, from the first note
-            (or the first octave change) to the closing tap, played back as if you played them (Hold and the arpeggio work on them).
-            Each note keeps the octave and transpose it was played with: changing octave while you record moves the notes, not the
-            panel, and changing them afterwards does not move the cycle.
+          <li>Notes make a cycle of their own, recorded like an audio looper: while ‹ is recording, what sounds — the notes you play,
+            or the arpeggio's steps (also a latched arpeggio, with no pad touched) — with their bends, slides, octave and transpose,
+            from the first note to the closing tap. At the closing tap the cycle starts from the top and takes over the notes you
+            still hold. It plays exactly what was recorded: turning the arpeggio off, changing octave or transpose afterwards leaves it
+            as it is (changing octave while you record moves the sounding notes, not the panel).
             A new take over it overdubs: the new notes join the cycle and play from the next round, nothing is erased
             (double tap ‹, or the cycle's pad on the loop page, to delete it).</li>
           <li>Octave changes alone, with no notes in the take, make an octave cycle: it changes octave under whatever you play.
@@ -193,8 +195,8 @@
             cycle, in the order they were recorded; every control with a cycle lights white, moving with it. Tap a pad: its
             control lights up blue (the transpose on its LEDs), and the screen draws the cycle with its
             play position. The speed, from /16 to X16, is on the screen (arrows or wheel).
-            Hold the pad: quantize — choose how many bars the cycle should last, yes stretches it to them and starts it
-            from the top on the next beat. Double tap a pad:
+            Hold the pad: quantize — choose how many bars the cycle should last, yes stretches it to them; it goes on from
+            where it was, nudged by less than half a beat so that it starts on a beat. Double tap a pad:
             that cycle is deleted. Tap ‹ or any other button to leave.</li>
         </ul>
       </section>
