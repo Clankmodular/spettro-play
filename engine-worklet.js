@@ -6,7 +6,7 @@
 // 96-frame block and its reply frame goes back to the controller and, about
 // 30 times per second, to the panel for LEDs and display.
 
-import { Controller, FRAME, IMAGE, STUTTER } from './esp/controller.js?v=0c220bf317';
+import { Controller, FRAME, IMAGE } from './esp/controller.js?v=b74dc7e20e';
 
 // The engine runs at engineRate (48 kHz); sampleRate, the device's rate,
 // may differ (44.1 kHz interfaces): then process() resamples. Frame and status timing count engine samples.
@@ -54,7 +54,6 @@ class SpectrumProcessor extends AudioWorkletProcessor {
     // stutters again at once. The engine repeats its delay input (a beat
     // repeat before delay and reverb); here only the loop length is sent.
     this.engineRate = engineRate;
-    this.stutter = { step: 0, sent: 0 };
     this.tapLights = this.lights.subarray(8, 16);
     // Audio input for the External bank: mid (L+R)/2 and side (L-R)/2 at the
     // device rate, read at the engine rate (linear) into the engine's input
@@ -82,15 +81,13 @@ class SpectrumProcessor extends AudioWorkletProcessor {
       case 'set':
         Object.assign(c.pr, data.values);
         if ('selKeyboard' in data.values || 'keyboardLayout' in data.values) c.updateKeyboard();
-        // Web fx mix goes straight to the engine, not through the SPI frame.
-        if ('fxMix' in data.values) this.e.spectrum_set_fx_mix(c.pr.fxMix);
         break;
       case 'prop':
         if ('midiChannel' in data.values && data.values.midiChannel !== c.midiChannel) c.midiReset();
         Object.assign(c, data.values);
         break;
       case 'call': c[data.method](...(data.args || [])); break;
-      case 'stutter': this.stutter.step = data.step; break;
+      case 'stutter': c.stutterStep = data.step; break;
       case 'midi': c.midi(data.bytes); break;
       case 'adc':
         for (const [channel, value] of data.values) {
@@ -133,14 +130,13 @@ class SpectrumProcessor extends AudioWorkletProcessor {
   }
 
   renderBlock() {
+    // While it stutters, the captured voices are silenced in the frame and
+    // whatever else is played sounds over the repeat; the step goes in the
+    // frame (byte 31) and the engine sets the loop length from the clock.
+    const c = this.controller;
+    c.droneMuted = c.stutterStep !== 0 && c.droneActive();
     if (this.sinceFrame >= this.frameSamples) { this.sinceFrame -= this.frameSamples; this.sendFrame(); }
     const n = this.blockFrames;
-    // While it stutters, the captured voices are silenced in the frame and
-    // whatever else is played sounds over the repeat.
-    const c = this.controller, S = this.stutter;
-    c.droneMuted = S.step !== 0 && c.droneActive();
-    const length = c.droneMuted ? Math.round(STUTTER[S.step][1] * c.clockTimeMs / 1000 * this.engineRate) : 0;
-    if (length !== S.sent) { this.e.spectrum_set_stutter(length); S.sent = length; }
     this.readInput(n);
     const ptr = this.e.spectrum_render();
     if (ptr !== this.outPtr) { this.outPtr = ptr; this.out = new Float32Array(this.mem.buffer, ptr, 2 * n); }
@@ -162,10 +158,15 @@ class SpectrumProcessor extends AudioWorkletProcessor {
         geometry: this.geometry(), bandLevels: Array.from(lights.subarray(0, 8)),
         taps: Array.from(lights.subarray(8, 16)), delayHits: this.hits, load: this.load.last,
         rec: this.controller.recDrain() });
-      this.hits = 0;
+      this.hits = null;
     }
-    // Hits are collected every block so short flashes are not missed.
-    if (this.controller.attacks.length) { this.e.spectrum_lights(); this.hits = (this.hits || 0) | this.controller.delayHits(this.tapLights); }
+    // Hits are collected every block so short flashes are not missed: the
+    // loudest repeat of each line since the last status.
+    if (this.controller.attacks.length) {
+      this.e.spectrum_lights();
+      const levels = this.controller.delayHits(this.tapLights);
+      this.hits = this.hits ? this.hits.map((l, b) => Math.max(l, levels[b])) : levels;
+    }
   }
 
   // This quantum of the audio input, mono (silence when none is connected).

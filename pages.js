@@ -5,7 +5,7 @@
 // The web version has no encoder: editable cards carry < > arrows and every
 // page returns its mouse regions ({x, y, w, h, step, click, select}).
 
-import { COLOR, drawText, textWidth } from './display.js?v=0c220bf317';
+import { COLOR, drawText, textWidth } from './display.js?v=b74dc7e20e';
 
 const ARROW_W = 22;
 
@@ -383,18 +383,48 @@ export function drawPresetPage(ctx, m, act) {
   let size = 2;
   while (size > 1 && textWidth(m.name || '-', size) > 216) size--;
   drawText(ctx, m.name || '-', 120, 184, size, COLOR.normal, 'center');
+  // A click on the name of a saved user preset renames it.
   // Slot occupancy of the bank, two rows of 12; a click selects the slot.
   const regions = [
     { x: 12, y: 54, w: 102, h: 84, select: () => { m.row = 0; }, step: act.bank },
     { x: 126, y: 54, w: 102, h: 84, select: () => { m.row = 1; }, step: act.slot },
     { x: 12, y: 146, w: 104, h: 30, click: act.load },
     { x: 124, y: 146, w: 104, h: 30, click: act.save },
+    { x: 12, y: 180, w: 216, h: 16, click: act.rename },
   ];
   for (let i = 0; i < m.used.length; i++) {
     const x = 12 + (i % 12) * 18, y = 198 + Math.floor(i / 12) * 13;
     ctx.fillStyle = i === m.slot ? COLOR.highlight : m.used[i] ? COLOR.secondary : COLOR.track;
     ctx.fillRect(x, y, 14, 9);
     regions.push({ x: x - 2, y: y - 2, w: 18, h: 13, click: () => act.pick(i) });
+  }
+  return regions;
+}
+
+// Band levels (Mode held 500 ms, as the instrument's drawBandLevelsMenu):
+// eight vertical faders, the touched ones orange, the looped ones cyan with a
+// mark under their number; the line across is the middle row of pads. Web:
+// the bars can also be dragged with the mouse; "full" (the encoder click on
+// the instrument) brings every band back to full.
+export function drawBandLevelsPage(ctx, m, act) {
+  const touched = m.touched.findIndex((t) => t);
+  header(ctx, 'band levels', touched >= 0 ? `${Math.round(m.levels[touched] * 100 / 255)}%` : 'full');
+  const X = 12, PITCH = 27, W = 23, TOP = 58, H = 138;
+  const regions = [{ x: 150, y: 0, w: 90, h: 46, click: act.full }];
+  for (let c = 0; c < 8; c++) {
+    const x = X + c * PITCH, on = m.touched[c], loop = m.looped[c];
+    ctx.fillStyle = COLOR.track;
+    ctx.fillRect(x, TOP, W, H);
+    const h = Math.round(H * m.levels[c] / 255);
+    ctx.fillStyle = on ? COLOR.selected : loop ? COLOR.meter : COLOR.highlight;
+    if (h > 0) ctx.fillRect(x, TOP + H - h, W, h);
+    ctx.fillStyle = COLOR.rule;
+    ctx.fillRect(x, TOP + H / 2, W, 1);
+    drawText(ctx, String(c + 1), x + W / 2, TOP + H + 8, 2, on ? COLOR.selected : COLOR.normal, 'center');
+    if (loop) { ctx.fillStyle = COLOR.meter; ctx.fillRect(x + 4, TOP + H + 26, W - 8, 3); }
+    const level = (y) => Math.max(0, Math.min(1, (TOP + H - y) / H));
+    regions.push({ x: x - 2, y: TOP, w: W + 4, h: H, press: (_, y) => act.set(c, level(y)), drag: (_, y) => act.set(c, level(y)),
+      step: (n) => act.set(c, Math.max(0, Math.min(1, m.levels[c] / 255 + n / 51))) });
   }
   return regions;
 }

@@ -3,12 +3,12 @@
 // motion), presets and LEDs. Notes, voices, arpeggio and the SPI frame run
 // in the AudioWorklet (esp/controller.js); this side sends it `pr` changes.
 
-import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=0c220bf317';
-import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=0c220bf317';
-import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=0c220bf317';
-import * as P from './pages.js?v=0c220bf317';
-import { MODES, BANKS } from './display.js?v=0c220bf317';
-import { Presets, SLOTS } from './presets.js?v=0c220bf317';
+import { defaultPreset, migratePreset, DEST, STUTTER, LFO_SPEEDS, lfoSpeedIndex } from './esp/controller.js?v=b74dc7e20e';
+import { SCALES, LAYOUT_NAMES, KEYS, degreeForKey, frequency, nearestDegree } from './esp/scales.js?v=b74dc7e20e';
+import { PATTERNS, DIVISIONS, MAX_ARP_STEPS, divisionIndex, speedForDivision, stepsPerBeat, euclidHit, humanDelay, humanPressure } from './esp/trillo.js?v=b74dc7e20e';
+import * as P from './pages.js?v=b74dc7e20e';
+import { MODES, BANKS } from './display.js?v=b74dc7e20e';
+import { Presets, SLOTS } from './presets.js?v=b74dc7e20e';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const now = () => performance.now();
@@ -36,12 +36,13 @@ const CC_DESTS = [[DEST.None, 'none'], [DEST.OscWave, 'osc B'], [DEST.SubWave, '
 // One LFO per control (3 November): the controls on the pads of the LFO
 // page, in panel order, and the knob or fader of each (the three by Δt in
 // their delay or reverb bank).
+// No LFO on the volume (5 November 2026, as the instrument): 19 controls.
 const LFO_ORDER = [DEST.Bands, DEST.Spread, DEST.Rotate, DEST.Width, DEST.OscWave, DEST.SubWave, DEST.Crossmod,
-  DEST.Blend, DEST.Drive, DEST.Master, DEST.DelayTime, DEST.Dispersion, DEST.DelayFeedback, DEST.ReverbSize,
+  DEST.Blend, DEST.Drive, DEST.DelayTime, DEST.Dispersion, DEST.DelayFeedback, DEST.ReverbSize,
   DEST.ReverbDetail, DEST.Feedback, DEST.Attack, DEST.Release, DEST.Transpose, DEST.Tune];
 const LFO_CONTROL = { [DEST.Bands]: 'bands', [DEST.Spread]: 'shape', [DEST.Rotate]: 'shift', [DEST.Width]: 'reso',
   [DEST.OscWave]: 'oscB', [DEST.SubWave]: 'oscA', [DEST.Crossmod]: 'xmod', [DEST.Blend]: 'blend', [DEST.Drive]: 'drive',
-  [DEST.Master]: 'volume', [DEST.DelayTime]: 'time', [DEST.Dispersion]: 'spread', [DEST.DelayFeedback]: 'diffuse',
+  [DEST.DelayTime]: 'time', [DEST.Dispersion]: 'spread', [DEST.DelayFeedback]: 'diffuse',
   [DEST.ReverbSize]: 'time', [DEST.ReverbDetail]: 'spread', [DEST.Feedback]: 'diffuse', [DEST.Attack]: 'attack',
   [DEST.Release]: 'release', [DEST.Transpose]: 'transpose', [DEST.Tune]: 'tune' };
 const REVERB_DESTS = new Set([DEST.ReverbSize, DEST.ReverbDetail, DEST.Feedback]);
@@ -55,9 +56,22 @@ const MODE_COLORS = [LED.blue, LED.yellow, LED.green, LED.red];
 const LOOP_LANES = 24;
 // Cycles the worklet plays (Controller), on its 5 ms tick.
 const WORKLET_LANES = { notes: 'setNoteLoop', octave: 'setOctaveLoop' };
+// Octave buttons (left to right on the panel) and their octave index: with
+// none lit the pads start from C1 (index 1; index 3 is C3), each button adds
+// +1..+4 octaves. The ids keep the former -2 -1 +1 +2 names.
+const OCTAVE_NONE = 1;
+const OCTAVE_BUTTONS = { octDown2: 2, octDown1: 3, octUp1: 4, octUp2: 5 };
 const LOOP_RATES = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 4, 8, 16];
 const rateLabel = (r) => (r < 1 ? `/${Math.round(1 / r)}` : `X${r}`);
 const LOOP_BARS = [1, 2, 3, 4, 6, 8, 12, 16]; // quantize choices (4 beats a bar)
+// The knobs by Δt: a cycle belongs to the parameter, not to the knob (asked
+// by the user, 5 November 2026, as on the instrument): in the reverb bank
+// the three knobs record size, detail and diffuse, the delay cycles of time,
+// spread and feedback keep playing in the other bank.
+const REVERB_LANE = { time: 'size', spread: 'detail', diffuse: 'reverbDiffuse' };
+const LANE_KNOB = { size: 'time', detail: 'spread', reverbDiffuse: 'diffuse' };
+const LANE_PARAM = { time: 'delayTime', spread: 'delayShift', diffuse: 'delayFeedback',
+  size: 'reverbSize', detail: 'reverbFuse', reverbDiffuse: 'delayRegen' };
 // Arpeggio rules per pad: x of every y cycles (y up to 8), accumulator modes.
 const ARP_PLAYS = []; for (let y = 1; y <= 8; y++) for (let x = 1; x <= y; x++) ARP_PLAYS.push([x, y]);
 const ARP_MODES = ['clip', 'wrap', 'pendulum'];
@@ -155,7 +169,11 @@ export class Ui {
   call(method, ...args) { this.send('call', { method, args }); }
   set(values) { Object.assign(this.pr, values); this.send('set', { values }); this.presetDirty = true; }
   // Octave changes are recorded while rec is armed (loopRecordOctave).
-  setOctave(index) { const from = this.pr.octaveIndex; this.set({ octaveIndex: index }); this.loopRecordOctave(index, from); }
+  // With an octave cycle playing the buttons are inert, as a looped control.
+  setOctave(index) {
+    if (this.loopPlaying('octave')) return;
+    const from = this.pr.octaveIndex; this.set({ octaveIndex: index }); this.loopRecordOctave(index, from);
+  }
   sendAdc() { this.send('adc', { values: [[ADC_TUNE, this.adc.tune], [ADC_MASTER, this.adc.volume]] }); }
 
   // ---- Controls -----------------------------------------------------------
@@ -199,9 +217,13 @@ export class Ui {
       // a control by hand deletes its cycle, see loopRecord).
       if (this.lfoEdit) {
         this.lfoFocusControl(id);
-        if (this.loop.lanes.has(id)) { this.panel.set(id, this.positions()[id]); return; }
+        if (this.loop.lanes.has(this.laneId(id))) { this.panel.set(id, this.positions()[id]); return; }
       }
-      this.loopRecord(id, v);
+      // A control whose cycle plays is inert (5 November 2026, as the
+      // instrument): the cycle goes on and is cleared only from the loop
+      // page. While rec is armed the movement records a new take.
+      if (this.loopPlaying(this.laneId(id))) { this.panel.set(id, this.positions()[id]); return; }
+      this.loopRecord(this.laneId(id), v);
     }
     const b = (x) => Math.round(x * 255), r = this.reverbBank;
     switch (id) {
@@ -245,6 +267,75 @@ export class Ui {
     }
   }
 
+  // ---- Band levels page (Mode held 500 ms; 5 November 2026, as the
+  // instrument's band_page.inc) --------------------------------------------
+  // The pads stop playing new notes; each of the 8 columns is the fader of a
+  // band: the finger's position between the three rows (bottom 0 %, middle
+  // 50 %, top 100 %, continuous in between by the pressures) sets its level,
+  // which stays on release and is saved in the preset. Held notes, drones,
+  // arpeggio, note cycles and MIDI keep playing. The levels are recorded by
+  // the looper as the knobs (lanes level1..level8). Web: the bars on the
+  // screen can also be dragged; "full" sets every band back to full.
+
+  openBandLevels() {
+    this.openPage('bands');
+    // Fingers already down (held notes) count only after they lift.
+    const keys = this.state?.status.keys || [];
+    this.bandTouch = { ignored: new Set(keys.flatMap((k, i) => (k ? [i] : []))),
+      pressure: new Map(), lostAt: new Array(8).fill(0), rows: new Array(8).fill(0) };
+  }
+
+  bandPad(index, action, pressure) {
+    const T = this.bandTouch;
+    if (!T) return;
+    if (action === 'off') { T.ignored.delete(index); T.pressure.delete(index); }
+    else if (!T.ignored.has(index)) T.pressure.set(index, pressure == null ? 1 : Math.max(0.05, Math.min(1, pressure)));
+    this.bandColumns(now());
+  }
+
+  // Position of each column from its pads; a pad leaving waits 60 ms (a
+  // lifting finger leaves the pads one at a time), a pad joining follows.
+  bandColumns(t) {
+    const T = this.bandTouch;
+    for (let c = 0; c < 8; c++) {
+      // Rows: 0 top, 1 middle, 2 bottom (pad index = row * 8 + column).
+      const p = [0, 1, 2].map((r) => T.pressure.get(r * 8 + c) || 0);
+      const set = p.reduce((m, x, r) => (x ? m | (1 << r) : m), 0);
+      if (!set) { T.rows[c] = 0; T.lostAt[c] = 0; continue; }
+      if (set & ~T.rows[c]) T.lostAt[c] = 0;
+      else if (set !== T.rows[c]) T.lostAt[c] = t;
+      T.rows[c] = set;
+      if (T.lostAt[c] && t - T.lostAt[c] < 60) continue;
+      T.lostAt[c] = 0;
+      this.setBandLevel(c, (p[0] + 0.5 * p[1]) / (p[0] + p[1] + p[2]));
+    }
+  }
+
+  // A band level from the page (0..1): recorded while rec is armed; a band
+  // whose cycle plays is inert to the pads.
+  setBandLevel(c, v, fromLoop = false) {
+    const id = `level${c + 1}`;
+    if (!fromLoop) {
+      if (this.loopPlaying(id)) return;
+      this.loopRecord(id, v);
+    }
+    const level = clamp(Math.round(v * 255), 0, 255);
+    if (level === this.pr.bandLevels[c]) return;
+    const levels = this.pr.bandLevels.slice();
+    levels[c] = level;
+    this.set({ bandLevels: levels });
+  }
+
+  drawBands(ctx) {
+    const T = this.bandTouch;
+    if (T?.lostAt.some((x) => x)) this.bandColumns(now());
+    return P.drawBandLevelsPage(ctx, { levels: this.pr.bandLevels, touched: (T?.rows || []).map((r) => r !== 0),
+      looped: Array.from({ length: 8 }, (_, c) => this.loop.lanes.get(`level${c + 1}`)?.length > 0) }, {
+      set: (c, v) => this.setBandLevel(c, v),
+      full: () => { for (let c = 0; c < 8; c++) this.setBandLevel(c, 1); this.display.show('bands full', 700); },
+    });
+  }
+
   // ---- LFO assignment ---------------------------------------------------
 
   // Web, one LFO per control (3 November, as asked by the user): on the LFO
@@ -257,7 +348,7 @@ export class Ui {
   touchControl(id) {
     if (id === 'amount' || id === 'speed' || !this.lfoEdit) return false;
     this.lfoFocusControl(id);
-    return this.loop.lanes.has(id);
+    return this.loop.lanes.has(this.laneId(id));
   }
 
   lfoAssignedTo(d) { return d >= 0 && (this.pr.lfoAssigned[d >> 3] & (1 << (d & 7))) !== 0; }
@@ -332,16 +423,13 @@ export class Ui {
       let depth = Math.round((v - 0.5) * 510);
       if (Math.abs(depth) < 4) depth = 0; // the middle: off
       depth = clamp(depth, -255, 255);
-      if (depth !== this.pr.lfoDepth[d]) {
-        this.setLfoDepth(d, depth);
-        this.display.show(`LFO ${LFO_LABEL[d] || ''} ${depth ? `${depth > 0 ? '+' : ''}${Math.round(depth / 2.55)}%` : 'off'}`, 700);
-      }
+      // No popup: the LFO page shows amount, speed and wave (as the instrument).
+      if (depth !== this.pr.lfoDepth[d]) this.setLfoDepth(d, depth);
     } else {
       const value = Math.round(v * 255);
       if (value !== this.pr.lfoSpeeds[d]) {
         this.setLfoField('lfoSpeeds', d, value);
         this.lfoTemplate.speed = value;
-        this.display.show(`LFO ${LFO_LABEL[d] || ''} ${LFO_SPEEDS[lfoSpeedIndex(value)]}`, 700);
       }
     }
     this.lfoPotIndicate(id, d);
@@ -364,7 +452,6 @@ export class Ui {
     const wave = this.pr.lfoWaves[d] >= 5 ? 1 : this.pr.lfoWaves[d] + 1;
     this.setLfoField('lfoWaves', d, wave);
     this.lfoTemplate.wave = wave;
-    this.display.show(`LFO ${LFO_LABEL[d] || ''} ${LFO_WAVES[wave - 1]}`, 700);
   }
 
   // Where the LFO moves a destination now, in panel units: its depth times
@@ -485,7 +572,7 @@ export class Ui {
       for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? color(DEST.Transpose) : null);
     }
     // Red: white pads do not show on the light pads.
-    for (let k = 0; k < KEYS; k++) p.padLight(k, k < list.length ? LED.red : null, list[k] === d ? 1 : 0.35);
+    for (let k = 0; k < KEYS; k++) p.padLight(k, k < list.length ? LED.red : null, list[k] === d ? 1 : 0.1);
   }
 
   // ---- Buttons ---------------------------------------------------------
@@ -507,25 +594,30 @@ export class Ui {
     // The envelope and arp menus close on any other button, which then acts as
     // usual; the octave buttons leave them open, and Hold leaves every page
     // open (web, asked by the user).
-    const owner = { envelope: 'envelope', arp: 'arp', arpnote: 'arp', loops: 'loop', lfos: 'lfoAssign' }[this.page];
+    // The band levels page stays open with Hold and rec (rec arms a take of
+    // the levels); any other button leaves it, Mode only leaves.
+    const owner = { envelope: 'envelope', arp: 'arp', arpnote: 'arp', loops: 'loop', lfos: 'lfoAssign', bands: 'mode' }[this.page];
     const keepsMenu = id === 'hold' || (id.startsWith('oct') && (this.page === 'arp' || this.page === 'arpnote' || this.page === 'envelope'))
-      || (id === 'lfoWave' && this.page === 'lfos');
+      || (id === 'lfoWave' && this.page === 'lfos') || (id === 'loop' && this.page === 'bands');
     if (owner && down && id !== owner && !keepsMenu) this.openPage('analyser');
 
     switch (id) {
-      // Tap: change octave (the lit one again: back to 0). Held 300 ms or
-      // more (web only): momentary, the release restores the previous octave
-      // unless another octave button has changed it meanwhile.
+      // Tap: change octave (the lit one again: back to none, pads from C1).
+      // The four buttons add +1..+4 octaves, as the instrument (6 November
+      // 2026). Held 300 ms or more (web only): momentary, the release
+      // restores the previous octave unless another octave button has
+      // changed it meanwhile.
       case 'octDown2': case 'octDown1': case 'octUp1': case 'octUp2': {
         if (down) {
-          const index = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 }[id];
+          const index = OCTAVE_BUTTONS[id];
           b.previous = this.pr.octaveIndex;
-          b.octave = this.pr.octaveIndex === index ? 3 : index;
+          b.octave = this.pr.octaveIndex === index ? OCTAVE_NONE : index;
           this.setOctave(b.octave);
         } else if (!b.consumed && held >= 300 && this.pr.octaveIndex === b.octave) this.setOctave(b.previous);
         return;
       }
-      case 'hold': return this.call(down ? 'holdDown' : 'holdUp');
+      // On the band levels page Hold opens the stutter drone over what sounds.
+      case 'hold': return down ? this.call('holdDown', this.page === 'bands') : this.call('holdUp');
       case 'arp':
         if (down) { b.timer = setTimeout(() => { b.consumed = true; this.openPage(this.page === 'arp' ? 'analyser' : 'arp'); }, 300); return; }
         clearTimeout(b.timer);
@@ -544,8 +636,17 @@ export class Ui {
       case 'lfoWave':
         if (!down) return;
         return this.lfoWaveButton();
+      // Mode (5 November 2026, as the instrument): a tap changes the filter
+      // type at its release; held 500 ms it opens the band levels page. On
+      // that page a press only leaves it (its release does nothing).
       case 'mode':
-        if (!down) return;
+        if (down) {
+          if (this.page === 'bands') { b.consumed = true; return this.openPage('analyser'); }
+          b.timer = setTimeout(() => { b.consumed = true; this.openBandLevels(); }, 500);
+          return;
+        }
+        clearTimeout(b.timer);
+        if (b.consumed) return;
         this.set({ spectralMode: (this.pr.spectralMode + 1) % 4 });
         return this.display.show(MODES[this.pr.spectralMode], 900);
       case 'bank': {
@@ -614,6 +715,7 @@ export class Ui {
 
   openPage(page) {
     if (page !== 'loops') this.loopEdit = null;
+    if (page !== 'bands') this.bandTouch = null;
     if (page !== 'lfos' && this.lfoEdit) { this.lfoEdit = null; this.setLfoFocus(-1); }
     this.page = page;
     for (const m of Object.values(this.menus)) m.editing = false;
@@ -810,6 +912,11 @@ export class Ui {
   // Keys without real pressure (finger, mouse, PC keyboard) play as a key
   // pressed fully.
   pad(index, action, pressure, source = 'pad') {
+    if (this.page === 'bands') {
+      if (action === 'off') this.call('keyOff', index); // a note held from before still ends
+      this.bandPad(index, action, pressure);
+      return;
+    }
     if (this.lfoEdit) {
       if (action === 'off') this.call('keyOff', index); // a note held from before still ends
       if (action !== 'pressure') this.lfoEditPad(index, action === 'on');
@@ -839,7 +946,7 @@ export class Ui {
   // Touch bend from pad index towards target, pos 0..1; off with the
   // arpeggio, as on the instrument. The instrument also turns it off in the
   // preset menu, where its keys pick slots; here the pads still play there.
-  bendAllowed() { return !this.pr.trilloOn && !this.loopEdit && !this.lfoEdit; }
+  bendAllowed() { return !this.pr.trilloOn && !this.loopEdit && !this.lfoEdit && this.page !== 'bands'; }
   padBend(index, target, pos) {
     if (!this.bendAllowed()) return;
     this.call('keyBend', index, target, pos);
@@ -1012,10 +1119,10 @@ export class Ui {
   // 'octave'), from the first change to the closing press, played by the
   // worklet like the notes (so it also plays alone, with nothing played) and
   // moving the panel's octave. A new octave take replaces it; out of a take
-  // a change by hand deletes it, as for a control.
+  // the buttons are inert while it plays (setOctave), as a looped control.
   loopRecordOctave(index, from) {
     const L = this.loop, t = now();
-    if (!L.armed) { if (L.lanes.delete('octave')) this.sendLoop('octave', null); return; }
+    if (!L.armed) return;
     L.movedSinceTap = true;
     const notes = L.lanes.get('notes');
     if ((notes && !notes.length) || L.overdub) return;
@@ -1042,7 +1149,7 @@ export class Ui {
     const L = this.loop, t = now();
     L.movedSinceTap = true;
     const lane = L.lanes.get(id);
-    if (!L.armed) { L.lanes.delete(id); return; } // a hand movement deletes only this cycle
+    if (!L.armed) return; // out of recording a looped control is inert (control)
     if (L.completed.has(id)) return;
     // The first movement of a control in this take replaces its old cycle;
     // 24 cycles at most, one per pad of the loop page.
@@ -1066,11 +1173,22 @@ export class Ui {
       if (i === lane.idx) continue;
       lane.idx = i;
       const v = lane.points[i][1];
-      this.panel.set(id, v);
-      this.control(id, v, true);
-      this.relight(id);
+      if (id.startsWith('level')) { this.setBandLevel(Number(id.slice(5)) - 1, v, true); continue; }
+      // A cycle of the other bank of the knobs by Δt sets its parameter only.
+      const knob = LANE_KNOB[id] || id;
+      if (this.laneId(knob) !== id) { this.set({ [LANE_PARAM[id]]: Math.round(v * 255) }); continue; }
+      this.panel.set(knob, v);
+      this.control(knob, v, true);
+      this.relight(knob);
     }
   }
+
+  // A cycle playing out of recording: its control (or band level, octave)
+  // is inert to the hand.
+  loopPlaying(id) { return !this.loop.armed && this.loop.lanes.get(id)?.length > 0; }
+
+  // The cycle a control records and plays: the knobs by Δt by their bank.
+  laneId(id) { return (this.reverbBank && REVERB_LANE[id]) || id; }
 
   // Cycles for a preset; an open cycle is saved as recorded so far.
   loopClip() {
@@ -1180,9 +1298,8 @@ export class Ui {
   }
 
   loopName(id) {
-    const r = this.reverbBank;
-    return { oscA: 'osc A', oscB: 'osc B', fx: 'fx mix', time: r ? 'size' : 'time', spread: r ? 'detail' : 'spread',
-      diffuse: r ? 'diffuse' : 'feedback' }[id] || id;
+    if (id.startsWith('level')) return `band ${id.slice(5)}`;
+    return { oscA: 'osc A', oscB: 'osc B', fx: 'fx mix', diffuse: 'feedback', reverbDiffuse: 'diffuse' }[id] || id;
   }
 
   drawLoops(ctx) {
@@ -1195,7 +1312,7 @@ export class Ui {
         yes: () => this.applyQuantize(), no: () => { e.quant = null; },
       });
     }
-    // The octave cycle as a stepped line, from -2 at the bottom to +2.
+    // The octave cycle as a stepped line, from none at the bottom to +4.
     const shown = id === 'octave' ? { ...lane, points: lane.points.map(([at, , , o]) => [at, clamp((o - 1) / 4, 0, 1)]) } : lane;
     return P.drawLoopPage(ctx, {
       name: id ? this.loopName(id) : '', count: ids.length, lane: done ? shown : null,
@@ -1208,8 +1325,8 @@ export class Ui {
   // the LFO page), the others dark. Also right after the loop moves a
   // control, or the panel would show it yellow until the next frame.
   loopEditIndicate(id, pos = this.positions()) {
-    const sel = this.loopEditIds()[this.loopEdit.sel], on = this.loop.lanes.has(id);
-    this.panel.indicate(id, on ? pos[id] : 0, on ? (id === sel ? LED.blue : LED.white) : null);
+    const sel = this.loopEditIds()[this.loopEdit.sel], lane = this.laneId(id), on = this.loop.lanes.has(lane);
+    this.panel.indicate(id, on ? pos[id] : 0, on ? (lane === sel ? LED.blue : LED.white) : null);
   }
 
   loopEditLeds() {
@@ -1226,7 +1343,7 @@ export class Ui {
       for (let i = 0; i < 12; i++) p.light(`transpose${i}`, (tr > 0 ? i < tr : tr < 0 && i >= 12 + tr) ? color('transpose') : null);
     }
     if (this.loop.lanes.has('octave')) {
-      for (const [b, index] of Object.entries({ octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 })) p.light(b, this.pr.octaveIndex === index ? color('octave') : null);
+      for (const [b, index] of Object.entries(OCTAVE_BUTTONS)) p.light(b, this.pr.octaveIndex === index ? color('octave') : null);
     }
     for (let k = 0; k < KEYS; k++) p.padLight(k, k < ids.length ? LED.blue : null, k === e.sel ? 1 : 0.4);
   }
@@ -1243,12 +1360,18 @@ export class Ui {
     const saved = migratePreset(data.pr);
     const pr = { ...defaultPreset(), ...saved };
     pr.lfoAssigned = Uint8Array.from(saved.lfoAssigned || []);
+    // Hold belongs to the preset (5 November 2026, as the instrument): the
+    // recall switches it as the button, so a preset without Hold releases
+    // the notes held; the notes played live stay, the saved ones are not
+    // played.
+    const latched = !!pr.latchedNote;
     pr.latchedNote = this.pr.latchedNote;
     const trillo = pr.trilloOn;
     pr.trilloOn = this.pr.trilloOn;
     this.pr = pr;
     this.send('set', { values: pr });
     if (trillo !== this.pr.trilloOn) { this.call('setTrillo', trillo); this.pr.trilloOn = trillo; }
+    if (latched !== !!this.pr.latchedNote) { this.call('setLatch', latched); this.pr.latchedNote = latched; }
     this.adc.volume = data.volume ?? this.adc.volume;
     this.adc.tune = data.tune ?? this.adc.tune;
     this.sendAdc();
@@ -1274,7 +1397,7 @@ export class Ui {
   savePreset() {
     if (this.presetBank === 0) return this.display.show('factory bank', 900);
     const data = this.snapshot();
-    data.name = data.name || `${String(this.presetBank).padStart(2, '0')}-${String(this.presetSlot + 1).padStart(2, '0')}`;
+    data.name = data.name || this.slotName(this.presetBank, this.presetSlot);
     this.presetName = data.name;
     this.presets.put(this.presetBank, this.presetSlot, data);
     this.presetDirty = false;
@@ -1299,7 +1422,7 @@ export class Ui {
   // Web drone: notes captured by a held Hold.
   drone() {
     const s = this.state?.status;
-    return !!s && (s.captured.length > 0 || s.midiCaptured);
+    return !!s && (s.captured.length > 0 || s.midiCaptured || s.bandStutter);
   }
 
   status(data) {
@@ -1339,7 +1462,7 @@ export class Ui {
     if (id === 'amount' || id === 'speed') { this.lfoPotIndicate(id, this.lfoTarget()); return; }
     const d = this.destinationFor(id);
     const assigned = this.lfoAssignedTo(d ?? -1);
-    const looped = this.loop.lanes.get(id)?.length > 0;
+    const looped = this.loop.lanes.get(this.laneId(id))?.length > 0;
     const reverb = this.reverbBank && (id === 'time' || id === 'spread' || id === 'diffuse');
     const drone = id === 'transpose' && this.drone();
     // With both a cycle and an LFO: white and blue in turn (asked by the user).
@@ -1366,38 +1489,48 @@ export class Ui {
     const blink = (ms) => (t % ms) < ms / 2;
 
     // Bands: steady yellow for the bands in use (bipolar: from the bottom up
-    // to the middle of the control, then the lowest fade out); while notes
-    // sound, the filters take the filter-mode colour and follow their own
-    // envelopes. Assigned to the LFO: with the LFO offset added, white.
+    // to the middle of the control, then the lowest fade out), scaled by the
+    // band levels page; while notes sound, the filters take the filter-mode
+    // colour and follow their own envelopes. With the LFO white (with its
+    // offset), with a loop cycle blue, both in turn as the rings; while notes
+    // sound the mode colour shows 1.5 s, then white or blue 0.5 s (white and
+    // blue in alternate cycles with both). As the instrument, 5 November.
     const bandsLfo = (pr.lfoAssigned[DEST.Bands >> 3] & (1 << (DEST.Bands & 7))) !== 0;
+    const bandsLoop = this.loop.lanes.get('bands')?.length > 0;
+    const marker = bandsLfo && bandsLoop ? (t % 1000 < 500 ? LED.white : LED.blue) : bandsLfo ? LED.white : bandsLoop ? LED.blue : null;
+    const soundingMarker = !marker || t % 2000 < 1500 ? null
+      : bandsLfo && bandsLoop ? (Math.floor(t / 2000) % 2 ? LED.blue : LED.white) : marker;
     const bandsByte = clamp(Math.round(pr.spectralBands + (bandsLfo ? this.lfoOffset(DEST.Bands) * 255 : 0)), 0, 255);
     const amount = 1 + Math.min(1, bandsByte / 128) * 7;
     const lowCut = bandsByte > 128 ? (bandsByte - 128) / 127 * 7 : 0;
     const levels = this.state.bandLevels || [];
     const sounding = levels.some((l) => l > 0.01);
     for (let i = 0; i < 8; i++) {
-      const present = (i === 0 ? 1 : clamp(amount - i, 0, 1)) * clamp(i + 1 - lowCut, 0, 1);
+      const present = (i === 0 ? 1 : clamp(amount - i, 0, 1)) * clamp(i + 1 - lowCut, 0, 1) * (pr.bandLevels?.[i] ?? 255) / 255;
       if (!present) p.light(`band${i}`, null);
-      else if (sounding) p.light(`band${i}`, levels[i] > 0.01 ? MODE_COLORS[pr.spectralMode] : null, Math.min(1, levels[i]) * present);
-      else p.light(`band${i}`, bandsLfo ? LED.white : LED.yellow, present);
+      else if (sounding) p.light(`band${i}`, levels[i] > 0.01 ? soundingMarker || MODE_COLORS[pr.spectralMode] : null, Math.min(1, levels[i]) * present);
+      else p.light(`band${i}`, marker || LED.yellow, present);
     }
     // Delay lines against the base time T, as the firmware display: shorter
     // turquoise, T white, longer orange (saturated at T/4 and 4T); brighter
-    // the longer the echo. Yellow when an echo arrives; red while the
-    // feedback holds (reported as frozen).
-    const taps = this.state.taps || [], hits = this.state.delayHits || 0;
+    // the longer the echo. Red when an echo arrives, also every feedback
+    // repeat a step quieter (delayHits), and while the feedback holds
+    // (reported as frozen). Bands cut from the bottom stay off. In the reverb
+    // bank the chain shows the reverb tail instead (reverbChain).
+    const taps = this.state.taps || [], hits = this.state.delayHits || [];
     const count = Math.ceil(amount - 1e-6);
     const sorted = taps.slice(0, count).filter((t) => t > 5).sort((a, b) => a - b);
     const base = ((reply[29] << 8) | reply[30]) || sorted[sorted.length >> 1] || 1;
     const freeze = reply[40] === 0xf2;
     const frozen = freeze ? reply[42] : 0, pending = freeze ? reply[43] : 0;
-    for (let i = 0; i < 8; i++) {
+    if (this.reverbBank) this.reverbChain(t);
+    else for (let i = 0; i < 8; i++) {
       const id = `delay${i}`, bit = 1 << i;
       if (frozen & bit) { p.light(id, LED.red, 1); continue; }
       if (pending & bit) { p.light(id, blink(260) ? LED.red : null, 0.8); continue; }
-      const on = i < count && taps[i] > 5;
+      const on = i < count && i + 1 - lowCut > 0 && taps[i] > 5;
       if (!on) { p.light(id, null); continue; }
-      if (hits & bit) { p.light(id, LED.yellow, 1); continue; }
+      if (hits[i] > 0) { p.light(id, LED.red, Math.max(0.25, hits[i])); continue; }
       const octaves = clamp(Math.log2(taps[i] / base), -2, 2);
       p.light(id, mixColor(LED.white, octaves < 0 ? LED.turquoise : LED.orange, Math.abs(octaves) / 2), 0.35 + 0.65 * (octaves + 2) / 4);
     }
@@ -1408,7 +1541,7 @@ export class Ui {
     const anyLfo = pr.lfoAssigned.some((b) => b);
     // Assign: white when anything is assigned (blinking on the LFO page).
     p.light('lfoAssign', anyLfo ? LED.white : null);
-    p.light('mode', MODE_COLORS[pr.spectralMode]);
+    p.light('mode', this.page === 'bands' && !blink(400) ? null : MODE_COLORS[pr.spectralMode]);
     p.light('bank', { 0: LED.white, 1: LED.green, 2: LED.red, 3: LED.blue, 4: LED.orange }[pr.oscBank]);
     const delayMs = (reply[29] << 8) | reply[30];
     // Reverb bank: steady red. Delay bank: a flash per delay time.
@@ -1432,8 +1565,7 @@ export class Ui {
     // Clock: yellow flash on the beat, steady while the BPM page is open.
     p.light('clock', this.page === 'bpm' || status.clockPhase < 40 ? LED.yellow : null);
     p.light('system', this.page === 'system' || this.page === 'note' ? LED.yellow : null);
-    const oct = { octDown2: 1, octDown1: 2, octUp1: 4, octUp2: 5 };
-    for (const [id, index] of Object.entries(oct)) p.light(id, pr.octaveIndex === index ? LED.yellow : null, Math.abs(index - 3) === 2 ? 1 : 0.7);
+    for (const [id, index] of Object.entries(OCTAVE_BUTTONS)) p.light(id, pr.octaveIndex === index ? LED.yellow : null, id === 'octDown2' || id === 'octUp2' ? 1 : 0.7);
     p.light('hold', status.latched ? LED.red : status.captured.length || status.midiCaptured ? LED.violet : null);
     p.light('arp', this.page === 'arp' || this.page === 'arpnote' ? (blink(400) ? LED.turquoise : null)
       : status.trilloOn ? (status.arpPaused ? (blink(500) ? LED.turquoise : null) : LED.turquoise) : null);
@@ -1469,7 +1601,56 @@ export class Ui {
       // LED levels 0..255 to pad-light opacity (the screen needs a floor).
       for (let k = 0; k < KEYS; k++) if (level[k]) lit[k] = [origin[k] ? LED.violet : LED.turquoise, Math.min(1, 0.15 + 0.85 * level[k] / 220)];
     }
+    // Band levels page: each column a bar of its level in the filter-mode
+    // colour (bottom 0 %, middle 50 %, top 100 %), white under a finger.
+    if (this.page === 'bands') {
+      const rows = this.bandTouch?.rows || [];
+      for (let c = 0; c < 8; c++) {
+        const level = (pr.bandLevels?.[c] ?? 255) / 255;
+        const light = [clamp((level - 0.5) * 2, 0, 1), clamp(level * 2, 0, 1), level > 0.01 ? 1 : 0.1];
+        for (let r = 0; r < 3; r++) lit[r * 8 + c] = light[r] > 0 ? [rows[c] ? LED.white : MODE_COLORS[pr.spectralMode], light[r]] : null;
+      }
+    }
     for (let k = 0; k < KEYS; k++) p.padLight(k, lit[k]?.[0], lit[k]?.[1] ?? 0);
+  }
+
+  // Reverb bank (5 November 2026, as the instrument's renderReverbChain):
+  // the delay chain shows the reverb tail. Every attack blooms red from the
+  // middle outwards, as the diffusion builds, then fades with the tail:
+  // Reverb (diffuse) the tail length, steady glow at its hold (240); Size a
+  // slower build-up and shimmer in a larger room; Detail from one shared tank
+  // (the eight LEDs together) to eight separate loops. Only a picture of the
+  // controls (no level from the engine), LFO included.
+  reverbChain(t) {
+    const pr = this.pr, p = this.panel;
+    const knob = (base, d) => clamp(base + this.lfoOffset(d) * 255, 0, 255);
+    const amountCode = knob(pr.delayRegen, DEST.Feedback);
+    const size = knob(pr.reverbSize, DEST.ReverbSize) / 255, detail = knob(pr.reverbFuse, DEST.ReverbDetail) / 255;
+    const amount = amountCode / 255, hold = amountCode >= 240;
+    const tau = (250 + 3800 * amount * amount) * (0.6 + 0.4 * size);
+    const build = 40 + 260 * size, shimmerMs = 350 + 1250 * size;
+    // Attack ages from the last status, run on to now.
+    const ages = (this.state.status.attackAges || []).map((a) => a + (t - this.statusAt));
+    const energy = new Array(8).fill(0);
+    for (const since of ages) {
+      if (!hold && since > 6 * tau * 1.4) continue;
+      const grown = clamp(since / build, 0, 1);
+      for (let i = 0; i < 8; i++) {
+        const distance = Math.abs(i - 3.5) / 3.5;
+        const reach = clamp(grown * 1.6 - distance * (1 - 0.6 * detail), 0, 1);
+        const spread = 1 + detail * 0.45 * Math.sin(i * 2.39996);
+        energy[i] = Math.max(energy[i], reach * (hold ? 1 : Math.exp(-since / (tau * spread))));
+      }
+    }
+    this.reverbHeld = hold ? Math.max(this.reverbHeld || 0, ...energy) : 0;
+    for (let i = 0; i < 8; i++) {
+      if (amount <= 0) { p.light(`delay${i}`, null); continue; }
+      const phase = 2 * Math.PI * (t % (shimmerMs * 8)) / shimmerMs;
+      const shimmer = 0.72 + 0.28 * Math.sin(phase + detail * i * 2.1 + (1 - detail) * i * 0.35);
+      const e = hold ? Math.max(this.reverbHeld, energy[i]) : energy[i];
+      const level = e * shimmer * (0.35 + 0.65 * amount);
+      p.light(`delay${i}`, level > 0.01 ? LED.red : null, level);
+    }
   }
 
   drawDisplay() {
@@ -1490,6 +1671,7 @@ export class Ui {
     else if (page === 'envelope') this.regions = this.drawEnvelope(ctx);
     else if (page === 'loops') this.regions = this.drawLoops(ctx);
     else if (page === 'lfos') this.regions = this.drawLfos(ctx);
+    else if (page === 'bands') this.regions = this.drawBands(ctx);
     else if (page === 'system') this.regions = this.drawSystem(ctx);
     else if (page === 'detune') {
       this.regions = P.drawDetunePage(ctx, pr.subDetuneCents,
@@ -1527,8 +1709,25 @@ export class Ui {
       pick: (i) => { this.presetSlot = i; m.row = 1; },
       load: () => this.loadPreset(),
       save: () => this.savePreset(),
+      rename: () => this.renamePreset(),
     });
   }
+
+  // Rename (5 November 2026, as the instrument): nine characters at most; an
+  // empty name becomes bank-slot. The factory bank cannot be renamed.
+  renamePreset() {
+    const bank = this.presetBank, slot = this.presetSlot, data = this.presets.get(bank, slot);
+    if (bank === 0) return this.display.show('factory bank', 900);
+    if (!data) return this.display.show('empty', 700);
+    const typed = window.prompt('preset name (9 characters)', data.name || '');
+    if (typed === null) return;
+    const name = typed.trim().slice(0, 9).trim() || this.slotName(bank, slot);
+    if (this.presetName === data.name) this.presetName = name;
+    this.presets.put(bank, slot, { ...data, name });
+    this.display.show(name, 900);
+  }
+
+  slotName(bank, slot) { return `${String(bank).padStart(2, '0')}-${String(slot + 1).padStart(2, '0')}`; }
 
   // Stepping row of a list page.
   stepper(page, row) { return { step: (n, fine) => this.edit(page, row, n, fine) }; }

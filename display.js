@@ -7,7 +7,7 @@
 // device pixels so the text stays crisp; the analyser curves are vector
 // paths sampled every half unit.
 
-import { ORG01 } from './org01.js?v=0c220bf317';
+import { ORG01 } from './org01.js?v=b74dc7e20e';
 
 export const SIZE = 240;
 // The firmware leaves 12-16 px margins; the web screen shows the useful area
@@ -15,10 +15,12 @@ export const SIZE = 240;
 export const VIEW = { offset: 6, size: 228 };
 export const toPage = (u) => VIEW.offset + u * VIEW.size / SIZE;
 const rgb = (c) => `rgb(${((c >> 11) & 31) * 255 / 31 | 0},${((c >> 5) & 63) * 255 / 63 | 0},${(c & 31) * 255 / 31 | 0})`;
+// Palette "vivid", as the instrument (display_style.h, chosen by the user on
+// 5 November 2026): white text, brighter accents and cards.
 export const COLOR = {
-  normal: rgb(0xbdf7), highlight: rgb(0x24be), selected: rgb(0xfaa4), rule: rgb(0x2104),
-  card: rgb(0x1082), cardFocus: rgb(0x1105), cardEdit: rgb(0x2081), rail: rgb(0x3186), secondary: rgb(0x7bef),
-  track: rgb(0x18c3), meter: rgb(0x6efb), longer: rgb(0xfd20), outline: rgb(0x4e7f),
+  normal: rgb(0xffff), highlight: rgb(0x359f), selected: rgb(0xfaa4), rule: rgb(0x4208),
+  card: rgb(0x2104), cardFocus: rgb(0x118c), cardEdit: rgb(0x5100), rail: rgb(0x52aa), secondary: rgb(0xad55),
+  track: rgb(0x2945), meter: rgb(0x7fff), longer: rgb(0xfd20), outline: rgb(0x4e7f),
   fillOut: rgb(0x0845), fillIn: rgb(0x3845), filterFill: rgb(0x3800), filterLine: rgb(0xc104),
   popup: rgb(0xf206), grid: rgb(0x1082),
 };
@@ -145,7 +147,7 @@ export class Display {
     const level = (raw) => Math.min(1, Math.max(0, (-72 * (1 - raw / 255) + 48) / 36));
     const analysing = reply[44] === 0xa6;
     const columns = Array.from({ length: 64 }, (_, i) => (analysing ? level(reply[48 + i]) : 0) * PLOT_HEIGHT);
-    const spectrum = new Float32Array(SAMPLES), filter = this.filterOverlay(geometry);
+    const spectrum = new Float32Array(SAMPLES), filter = this.filterOverlay(geometry, pr.bandLevels);
     for (let i = 0; i < SAMPLES; i++) {
       const pos = Math.min(63, Math.max(0, (i / 2) * (64 / (SIZE - 1)) - 0.5));
       const l = Math.floor(pos), r = Math.min(l + 1, 63);
@@ -211,8 +213,9 @@ export class Display {
     }
   }
 
-  // Gaussian lobes at the DSP's centre and -3 dB edges (keyboardFilterOverlay).
-  filterOverlay(g) {
+  // Gaussian lobes at the DSP's centre and -3 dB edges (keyboardFilterOverlay);
+  // the height follows the fader of the band levels page, as its bars.
+  filterOverlay(g, levels) {
     const heights = new Float32Array(SAMPLES), centers = new Float32Array(8).fill(-1);
     if (!g) return { heights, centers };
     const count = g[0], scale = 239 / Math.log(MAX_HZ / MIN_HZ);
@@ -224,7 +227,8 @@ export class Display {
       const center = project(f);
       centers[b] = Math.min(239, Math.max(0, center));
       const lw = 1 + Math.max(0, center - project(lower)), rw = 1 + Math.max(0, project(upper) - center);
-      const peak = (PLOT_HEIGHT - 1) * Math.min(1, Math.max(0, gain * Math.sqrt(bands)));
+      const level = (levels?.[b] ?? 255) / 255;
+      const peak = (PLOT_HEIGHT - 1) * level * Math.min(1, Math.max(0, gain * Math.sqrt(bands)));
       const first = Math.max(0, Math.floor((center - 4 * lw) * 2)), last = Math.min(SAMPLES - 1, Math.ceil((center + 4 * rw) * 2));
       for (let i = first; i <= last; i++) {
         const x = i / 2, d = (x - center) / (x < center ? lw : rw);

@@ -5,8 +5,8 @@
 // panel state lives in `pr` with the firmware field names and scales; every
 // frame is written as in updateBuffer() (esp32/src/spectrum.cpp).
 
-import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=0c220bf317';
-import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=0c220bf317';
+import { KEYS, degreeForKey, frequency, nearestDegree } from './scales.js?v=b74dc7e20e';
+import { Sequence, stepsPerBeat, euclidHit, humanDelay, humanPressure, withArpRhythm, withArpVelocity, MAX_ARP_STEPS } from './trillo.js?v=b74dc7e20e';
 
 export const FRAME = 128;
 const VOICES = 5;
@@ -36,18 +36,29 @@ export const STUTTER = [['drone', 0], ['1/2', 2], ['1/4.', 1.5], ['1/4', 1], ['1
   ['1/8', 0.5], ['1/8T', 1 / 3], ['1/16', 0.25], ['1/16T', 1 / 6], ['1/32', 0.125], ['1/64', 0.0625]];
 const LFO_DESTINATIONS = [DEST.Attack, DEST.Release, DEST.Drive, DEST.Bands, DEST.Spread, DEST.Rotate,
   DEST.Width, DEST.DelayTime, DEST.Feedback, DEST.Dispersion, DEST.OscWave, DEST.SubWave,
-  DEST.Blend, DEST.Crossmod, DEST.Master, DEST.Transpose, DEST.Tune,
-  DEST.ReverbSize, DEST.ReverbDetail, DEST.DelayFeedback];
+  DEST.Blend, DEST.Crossmod, DEST.Transpose, DEST.Tune,
+  DEST.ReverbSize, DEST.ReverbDetail, DEST.DelayFeedback]; // no LFO on the volume (5 November)
 const SUPPORTED = new Set(LFO_DESTINATIONS);
 // One LFO per control (lfo_bank.h of the engine, on the Daisy): these the Daisy
 // does not apply; the controller moves them with the wave the engine reports,
 // as the ESP32 would with its own copy of the bank.
-const LFO_HERE = new Set([DEST.Attack, DEST.Release, DEST.Transpose, DEST.Tune, DEST.Master]);
+const LFO_HERE = new Set([DEST.Attack, DEST.Release, DEST.Transpose, DEST.Tune]);
 // lfo_clock::Index: the 15 speed choices (/16 .. X16) of a speed control.
 export const lfoSpeedIndex = (c) => (c < 128 ? (c * 7) >> 7 : 7 + (((c - 128) * 8) >> 7));
 export const LFO_SPEEDS = ['/16', '/8', '/6', '/4', '/3', '/2', '/1.5', 'X1', 'X1.5', 'X2', 'X3', 'X4', 'X6', 'X8', 'X16'];
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+// pressure_law.h FromLinear: a linear pressure byte (0..255) to the code the
+// Daisy reads, 0 silence, 1..255 = -60..0 dB in steps of 60/254 dB.
+export function pressureCode(linear) {
+  if (!(linear > 0)) return 0;
+  if (linear >= 255) return 255;
+  const db = 20 * Math.log10(linear / 255);
+  if (db <= -60) return 1;
+  return clamp(1 + Math.round((db + 60) * 254 / 60), 1, 255);
+}
+// effect_controls.h FxMix, inverted: 0..1 to the byte (128 = 0.5 exactly).
+export const fxMixCode = (x) => (x <= 0.5 ? clamp(Math.round(x * 256), 0, 128) : clamp(128 + Math.round((x - 0.5) * 254), 128, 255));
 
 // Init patch: PresetData defaults, on the Spettro controls.
 export function defaultPreset() {
@@ -68,6 +79,8 @@ export function defaultPreset() {
     // Daisy DSP. Diffuse (delayRegen) holds the reverb from 240.
     reverbSize: 255, reverbFuse: 255, delayFeedback: 0, driveAmount: 0,
     fxMix: 0.5, // web: dry/effects, 0.5 = both at unity
+    // Level of each band from the pads (Mode held, 5 November), 255 full.
+    bandLevels: new Array(8).fill(255),
     // The final firmware has no sine: tri is the first LFO wave.
     lfoSpeed: 5, lfoWave: 1, lfoAmount: 0, lfoAssigned: new Uint8Array(7),
     // Web: one LFO per control (3 November): its amount, bipolar
@@ -180,7 +193,10 @@ export class Controller {
     this.pr = defaultPreset();
     this.frame = new Uint8Array(FRAME);
     this.analyserRequested = false;
-    this.lfoOutput = 0;
+    // Web drone stutter: the step chosen on the transpose fader (0..11) and
+    // whether the captured voices are silent while it repeats (worklet).
+    this.stutterStep = 0;
+    this.droneMuted = false;
     // Wave of every control's LFO, 0..255 (engine spectrum_lfo_waves), the
     // control being edited (sent in every frame) and the turn of the others.
     this.lfoWaves = new Uint8Array(56);
@@ -620,9 +636,17 @@ export class Controller {
 
   // ---- Hold (❄): tap latches, hold >= 300 ms captures momentarily -------
 
-  holdDown() {
+  holdDown(bandPage = false) {
     this.holdPressedAt = this.timeMs;
     this.holdCaptured = false;
+    if (bandPage) {
+      // Band levels page (as the instrument, 5 November 2026): the pads are
+      // faders, not notes. Hold opens the stutter drone over what is
+      // sounding: those voices go silent while it repeats.
+      this.bandStutter = this.v.map((v) => v.gate);
+      for (const h of this.midiHeld.values()) if (h.keyDown) h.captured = true;
+      return;
+    }
     for (let k = 0; k < KEYS; k++) if (this.keyDown[k]) this.momentaryHold.add(k);
     this.v.forEach((v) => { if (v.owner === OWNER_KEYBOARD && !v.looped && v.gate && this.momentaryHold.has(v.key)) v.holdKey = v.key; });
     // Web-only (the firmware captures keyboard keys only): MIDI notes held
@@ -632,17 +656,27 @@ export class Controller {
 
   // Web drone: notes captured by a held Hold (keyboard or MIDI).
   capturedVoice(v) {
+    if (this.bandStutter && v.gate && this.bandStutter[this.v.indexOf(v)]) return true;
     return v.gate && (v.owner === OWNER_KEYBOARD ? v.holdKey < KEYS : !!this.midiHeld.get(v.midiNote)?.captured);
   }
 
   droneActive() {
-    if (this.momentaryHold.size) return true;
+    if (this.momentaryHold.size || this.bandStutter) return true;
     for (const h of this.midiHeld.values()) if (h.captured) return true;
     return false;
   }
 
   holdUp() {
     const long = this.timeMs - this.holdPressedAt >= 300;
+    if (this.bandStutter) {
+      // Band page stutter: latched notes stay as they are; a short tap still
+      // toggles the latch, as on every page.
+      this.bandStutter = null;
+      for (const h of this.midiHeld.values()) h.captured = false;
+      if (!long) this.setLatch(!this.pr.latchedNote);
+      else if (!this.pr.latchedNote) this.midiReleaseLatched();
+      return;
+    }
     const captured = [...this.momentaryHold];
     this.momentaryHold.clear();
     this.v.forEach((v) => { v.holdKey = 255; });
@@ -1216,7 +1250,9 @@ export class Controller {
       f[TRIGGER[i]] = this.gen[i];
       // Web drone stutter: the captured voices go silent (pressure drives the
       // sustain level), still held, while the repeat plays; new notes sound.
-      f[PRESSURE[i]] = (v.owner === OWNER_MIDI && !v.gate) || (this.droneMuted && this.capturedVoice(v)) ? 0 : v.aft;
+      // The Daisy reads the pressure in dB (pressure_law.h, 6 November):
+      // the controller keeps it linear and converts it here.
+      f[PRESSURE[i]] = (v.owner === OWNER_MIDI && !v.gate) || (this.droneMuted && this.capturedVoice(v)) ? 0 : pressureCode(v.aft);
     }
     f[6] = clamp(Math.round(pr.attack + assign(DEST.Attack)), 0, 255);
     f[7] = clamp(Math.round(pr.release + assign(DEST.Release)), 0, 255);
@@ -1235,21 +1271,21 @@ export class Controller {
     f[27] = this.restartBits;
     f[28] = pr.delayReverse ? 1 : 0;
     f[29] = 0xb0 | (pr.oscBank >= 0 && pr.oscBank <= 4 ? pr.oscBank : 0); // 4: web External
-    f[30] = clamp(Math.trunc(assign(DEST.Master) * 127 / 255), -127, 127) & 255;
+    f[9] = fxMixCode(pr.fxMix); // no LFO or CC on fx mix
+    f[30] = clamp(Math.trunc(cc(DEST.Master) * 127 / 255), -127, 127) & 255; // no LFO on the volume
+    // Drone stutter step (effect_controls.h), only while the drone repeats.
+    f[31] = this.droneMuted ? this.stutterStep : 0;
     f[32] = clamp(Math.round(pr.spectralBands + assign(DEST.Bands)), 0, 255);
     // Spread: legacy byte 33 plus the u16 extension (spectral_control.h).
     const spread = clamp(pr.spectralSpread + assign(DEST.Spread), 0, 255);
     const spread16 = Math.trunc(clamp(spread / 255, 0, 1) * 65535 + 0.5);
     f[33] = Math.trunc(spread16 / 257); f[113] = 0x53; f[114] = 1; f[115] = spread16 >> 8; f[116] = spread16 & 255;
-    f[35] = Math.trunc(IMAGE / 65535 * 255);
+    f[35] = 191; // image fixed at 75 % (effect_controls.h kFixedImage)
     u16(36, pr.oscSubBlend + assign(DEST.Blend) * 255);
     f[42] = this.clockPhase();
     f[43] = 0; f[45] = 72;
     f[53] = pr.trilloOn ? 1 : 0;
     f[54] = clamp(pr.subDetuneCents + Math.round(assign(DEST.SubDetune) * 200 / 255), -100, 100) + 100;
-    f[57] = 255; // the wave at full scale; lfo() applies the amount
-    f[58] = clamp(pr.lfoWave + Math.round(assign(DEST.LfoWave) * 5 / 255), 0, 5);
-    f[59] = clamp(pr.lfoSpeed + assign(DEST.LfoSpeed), 0, 255);
     f[60] = clamp(Math.round(pr.reverbSize + assign(DEST.ReverbSize)), 0, 255);
     f[61] = 255;
     f[62] = clamp(Math.round(pr.reverbFuse + assign(DEST.ReverbDetail)), 0, 255);
@@ -1260,36 +1296,48 @@ export class Controller {
     f[80] = clamp(Math.round(pr.driveAmount + assign(DEST.Drive)), 0, 255);
     f[81] = this.analyserRequested ? 0xa6 : 0;
     f[83] = clamp(pr.spectralMode + Math.round(assign(DEST.FilterMode) / 255), 0, 3);
-    f[87] = 0xb7; f[88] = 7; // bytes 89-95: the single LFO has no destinations
+    // Band levels (band_levels.h): marker 0xb9, one byte a band.
+    f[87] = 0xb9;
+    for (let b = 0; b < 8; b++) f[88 + b] = clamp(Math.round(pr.bandLevels?.[b] ?? 255), 0, 255);
     this.writeLfoBank(f);
     return f;
   }
 
-  // Daisy reply (FillNormalSpiTxFrame): envelopes and LFO output; web: the
-  // wave of every control's LFO (spectrum_lfo_waves).
+  // Daisy reply (FillNormalSpiTxFrame): envelopes; web: the wave of every
+  // control's LFO (spectrum_lfo_waves).
   reply(tx, waves) {
     if (waves) this.lfoWaves.set(waves);
     if (tx[17] !== 54) return;
     for (let i = 0; i < VOICES; i++) this.adsr[i] = tx[ENVELOPE[i]];
-    this.lfoOutput = tx[34];
   }
 
   // Advance control time by one 5 ms frame.
-  // Delay lines hit by an echo now: the eight predelays have no feedback, so
-  // each attack returns once per line after that line's tap time.
+  // Delay lines hit by an echo now, 0..1 per line: the first echo of every
+  // attack and each feedback repeat (n * tap), a step quieter each, as the
+  // engine (SpectralDelay::SetFreezeControls: gain .97*x*(2-x) up to the hold
+  // at 240, LFO and CC included); shown while above -20 dB, 32 at most.
   delayHits(tapMs, windowMs = 90) {
-    let mask = 0;
-    for (const t of this.attacks)
+    const code = clamp(this.pr.delayFeedback + this.lfoShown(DEST.DelayFeedback) + this.cc(DEST.DelayFeedback), 0, 255);
+    const x = Math.min(code, 240) / 240, gain = code >= 240 ? 1 : 0.97 * x * (2 - x);
+    const maxRepeats = gain <= 0.1 ? 1 : gain >= 0.999 ? 32 : Math.min(32, 1 + Math.floor(Math.log(0.1) / Math.log(gain)));
+    const levels = new Array(8).fill(0);
+    for (const t of this.attacks) {
+      const since = this.timeMs - t;
       for (let b = 0; b < 8; b++) {
-        const at = t + tapMs[b];
-        if (tapMs[b] > 5 && this.timeMs >= at && this.timeMs < at + windowMs) mask |= 1 << b;
+        const tap = Math.trunc(tapMs[b]);
+        if (!(tap > 5)) continue;
+        const n = Math.floor(since / tap);
+        if (n < 1 || n > maxRepeats || since - n * tap >= windowMs) continue;
+        levels[b] = Math.max(levels[b], gain ** (n - 1));
       }
-    return mask;
+    }
+    return levels;
   }
 
   tick(ms) {
     this.timeMs += ms;
-    while (this.attacks.length && this.timeMs - this.attacks[0] > 16000) this.attacks.shift();
+    // Kept long enough for the feedback repeats (32 at most) of long taps.
+    while (this.attacks.length && (this.attacks.length > 64 || this.timeMs - this.attacks[0] > 60000)) this.attacks.shift();
     this.noteLoopTick();
     this.arpeggio();
     this.midiArpeggio();
@@ -1312,6 +1360,9 @@ export class Controller {
       latched: this.pr.latchedNote,
       captured: [...this.momentaryHold],
       midiCaptured: [...this.midiHeld.values()].some((h) => h.captured),
+      bandStutter: !!this.bandStutter,
+      // Ages of the recent attacks (ms), for the reverb-bank lights.
+      attackAges: this.attacks.slice(-16).map((t) => this.timeMs - t),
       trilloOn: this.pr.trilloOn,
       arpKey: this.arpKey,
       arpPaused: !!this.arpPaused,
@@ -1322,7 +1373,6 @@ export class Controller {
       octaveSeq: this.octaveSeq || 0,
       bpm: this.bpm,
       clockPhase: this.clockPhase(),
-      lfoOutput: this.lfoOutput,
       lfoWaves: Array.from(this.lfoWaves),
     };
   }
